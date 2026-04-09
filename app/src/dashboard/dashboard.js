@@ -8,6 +8,7 @@ let ceoFitAddon = null;
 let workerTerminals = {};
 let activeTerminal = 'ceo';
 let paused = false;
+let stopped = false;
 let lastPromptTime = 0;
 let statusFailCount = 0;
 const PROMPT_COOLDOWN = 5000;
@@ -37,7 +38,8 @@ function connectWs() {
   };
 
   socket.onclose = () => {
-    if (ws === socket) ws = null; // don't clobber a newer connection
+    if (ws === socket) ws = null;
+    if (stopped) return; // don't retry after intentional shutdown
     showBanner('Disconnected — reconnecting...', 'warning');
     setTimeout(connectWs, 3000);
   };
@@ -549,8 +551,8 @@ async function togglePause() {
 
 async function stopAll() {
   if (!confirm('Stop all agents and shut down?')) return;
-  showBanner('Shutting down...', 'danger');
   await fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
+  showSleepScreen();
 }
 
 async function approveSpawn(taskId) {
@@ -561,6 +563,45 @@ async function approveSpawn(taskId) {
 async function rejectSpawn(taskId) {
   await fetch(`/api/safety/reject/${taskId}`, { method: 'POST' });
   hideBanner();
+}
+
+// ─── Sleep Screen ───
+
+function showSleepScreen() {
+  stopped = true;
+  hideBanner();
+
+  // Hide all tabs and show sleep overlay
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector('.tabs').style.display = 'none';
+  document.querySelector('.prompt-bar').style.display = 'none';
+
+  // Create sleep overlay
+  const overlay = document.createElement('div');
+  overlay.id = 'sleep-screen';
+  overlay.style.cssText = `
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 16px; color: var(--text-muted);
+    font-size: 14px; background: var(--bg-primary);
+  `;
+  overlay.innerHTML = `
+    <div style="font-size: 32px; font-weight: 600; color: var(--text-secondary); font-family: var(--font-mono);">Eunomia</div>
+    <div style="color: var(--text-muted);">Session ended. All agents stopped.</div>
+    <div style="margin-top: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);">
+      Restart with: <span style="color: var(--accent);">npm run dev -- --project /path/to/project</span>
+    </div>
+  `;
+
+  // Insert after tabs
+  const statusBar = document.querySelector('.status-bar');
+  statusBar.parentNode.insertBefore(overlay, statusBar);
+
+  // Update status bar
+  const dot = document.getElementById('ceo-dot');
+  const state = document.getElementById('ceo-state');
+  dot.className = 'dot stopped';
+  state.textContent = 'Stopped';
+  document.getElementById('status-bar').className = 'status-bar';
 }
 
 // ─── Tabs ───

@@ -370,6 +370,7 @@ body {
 .status-bar .dot.green { background: var(--green); }
 .status-bar .dot.amber { background: var(--amber); }
 .status-bar .dot.red { background: var(--red); }
+.status-bar .dot.stopped { background: var(--text-muted); }
 
 /* ─── Prompt Input ─── */
 .prompt-bar {
