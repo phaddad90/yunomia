@@ -379,7 +379,7 @@ body {
   flex-shrink: 0;
 }
 
-.prompt-bar input {
+.prompt-bar textarea {
   flex: 1;
   padding: 8px 12px;
   font-size: 13px;
@@ -389,11 +389,16 @@ body {
   color: var(--text-primary);
   outline: none;
   font-family: var(--font-sans);
+  resize: none;
+  min-height: 36px;
+  max-height: 120px;
+  line-height: 1.4;
+  overflow-y: auto;
 }
 
-.prompt-bar input:focus { border-color: var(--accent); }
+.prompt-bar textarea:focus { border-color: var(--accent); }
 
-.prompt-bar input::placeholder { color: var(--text-muted); }
+.prompt-bar textarea::placeholder { color: var(--text-muted); }
 
 /* ─── Banner ─── */
 .banner {

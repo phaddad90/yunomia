@@ -91,7 +91,7 @@
 
   <!-- Prompt Input -->
   <div class="prompt-bar">
-    <input type="text" id="prompt-input" placeholder="Prompt CEO..." onkeydown="if(event.key==='Enter')sendPrompt()">
+    <textarea id="prompt-input" placeholder="Prompt CEO... (Shift+Enter for new line)" rows="1"></textarea>
     <button class="btn btn-accent" onclick="sendPrompt()">Send</button>
   </div>
 

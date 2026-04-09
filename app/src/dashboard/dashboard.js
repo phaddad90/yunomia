@@ -493,6 +493,24 @@ function handleSpawnApproval(data) {
 
 // ─── Controls ───
 
+function initPromptInput() {
+  const input = document.getElementById('prompt-input');
+
+  // Enter sends, Shift+Enter inserts newline
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendPrompt();
+    }
+  });
+
+  // Auto-resize textarea as content grows
+  input.addEventListener('input', () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  });
+}
+
 async function sendPrompt() {
   const input = document.getElementById('prompt-input');
   const message = input.value.trim();
@@ -503,10 +521,16 @@ async function sendPrompt() {
 
   // Echo the prompt in the CEO terminal so it feels like a conversation
   if (ceoTerminal) {
-    ceoTerminal.write(`\r\n\x1b[1;36m> You:\x1b[0m ${message}\r\n\r\n`);
+    const lines = message.split('\n').map(l => l.replace(/\r/g, ''));
+    ceoTerminal.write(`\r\n\x1b[1;36m> You:\x1b[0m ${lines[0]}\r\n`);
+    for (let i = 1; i < lines.length; i++) {
+      ceoTerminal.write(`\x1b[1;36m  |\x1b[0m ${lines[i]}\r\n`);
+    }
+    ceoTerminal.write('\r\n');
   }
 
   input.value = '';
+  input.style.height = 'auto';
 
   await fetch('/api/prompt', {
     method: 'POST',
@@ -583,6 +607,7 @@ function escapeHtml(str) {
 
 document.addEventListener('DOMContentLoaded', () => {
   initTerminals();
+  initPromptInput();
   connectWs();
 
   setInterval(refreshStatus, 5000);
