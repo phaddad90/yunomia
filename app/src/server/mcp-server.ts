@@ -36,6 +36,8 @@ export class McpServer {
   private logger: Logger;
   private projectPath: string;
   private onWorkerSpawned?: (agentId: string, taskId: string) => void;
+  private onWorkerOutput?: (agentId: string) => (data: string) => void;
+  private onSpawnApprovalNeeded?: (taskId: string, task: { title: string; model: string }) => void;
 
   constructor(
     tasks: TaskManager,
@@ -55,6 +57,14 @@ export class McpServer {
 
   setOnWorkerSpawned(cb: (agentId: string, taskId: string) => void): void {
     this.onWorkerSpawned = cb;
+  }
+
+  setOnWorkerOutput(cb: (agentId: string) => (data: string) => void): void {
+    this.onWorkerOutput = cb;
+  }
+
+  setOnSpawnApprovalNeeded(cb: (taskId: string, task: { title: string; model: string }) => void): void {
+    this.onSpawnApprovalNeeded = cb;
   }
 
   getToolDefinitions(): Array<{
@@ -245,7 +255,19 @@ export class McpServer {
 
     // Spawn approval (if enabled)
     if (this.safety.isApprovalRequired()) {
-      return this.ok(`Spawn approval requested for task ${taskId}. Waiting for human approval in the dashboard.`);
+      // Notify dashboard and wait for human response
+      if (this.onSpawnApprovalNeeded) {
+        this.onSpawnApprovalNeeded(taskId, { title: task.title, model: task.model });
+      }
+      const approved = await this.safety.requestApproval(task);
+      if (!approved) {
+        return this.error(`Spawn rejected by human for task ${taskId}.`);
+      }
+      // Re-check task status after approval wait (human may have changed it)
+      const refreshedTask = this.tasks.getTask(taskId);
+      if (!refreshedTask || refreshedTask.status !== 'planned') {
+        return this.error(`Task ${taskId} status changed during approval wait.`);
+      }
     }
 
     // Create worker directory
@@ -275,12 +297,6 @@ $${task.maxBudgetUsd}
 `;
     writeFileSync(join(workerDir, 'SOUL.md'), soulContent);
 
-    // Mark task active
-    await this.tasks.updateTask(taskId, {
-      status: 'active',
-      assignee: `worker-${taskId}`,
-    });
-
     // Model mapping
     const modelMap: Record<string, string> = {
       opus: 'claude-opus-4-6',
@@ -288,21 +304,36 @@ $${task.maxBudgetUsd}
       haiku: 'claude-haiku-4-5-20251001',
     };
 
-    // Spawn the worker
-    const session = await this.adapter.spawnSession(
-      'worker',
-      {
-        model: modelMap[task.model] || 'claude-sonnet-4-6',
-        cwd: workerDir,
-        additionalDirectories: [this.projectPath],
-        disallowedTools: this.safety.getWorkerDisallowedTools(),
-        canUseTool: this.safety.createWorkerToolGuard(workerDir),
-        maxBudgetUsd: task.maxBudgetUsd,
-        persistSession: false,
-      },
-      undefined,
-      taskId,
-    );
+    // Get output callback for worker terminal streaming
+    const outputCb = this.onWorkerOutput ? this.onWorkerOutput(taskId) : undefined;
+
+    // Spawn the worker FIRST — only mark active if spawn succeeds
+    let session;
+    try {
+      session = await this.adapter.spawnSession(
+        'worker',
+        {
+          model: modelMap[task.model] || 'claude-sonnet-4-6',
+          cwd: workerDir,
+          additionalDirectories: [this.projectPath],
+          disallowedTools: this.safety.getWorkerDisallowedTools(),
+          canUseTool: this.safety.createWorkerToolGuard(workerDir),
+          maxBudgetUsd: task.maxBudgetUsd,
+          persistSession: false,
+        },
+        outputCb,
+        taskId,
+      );
+    } catch (err) {
+      this.logger.error({ taskId, err }, 'Failed to spawn worker');
+      return this.error(`Failed to spawn worker for task ${taskId}: ${err}`);
+    }
+
+    // Spawn succeeded — now mark task active
+    await this.tasks.updateTask(taskId, {
+      status: 'active',
+      assignee: session.id,
+    });
 
     if (this.onWorkerSpawned) {
       this.onWorkerSpawned(session.id, taskId);

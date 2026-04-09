@@ -13,6 +13,7 @@ import { HeartbeatScheduler } from './heartbeat.js';
 import { McpServer } from './mcp-server.js';
 import type { EunomiaConfig, WsMessage, HealthResponse } from './types.js';
 import { DEFAULT_CONFIG, DEFAULT_SAFETY_CONFIG } from './types.js';
+import type { Logger } from 'pino';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -271,7 +272,7 @@ async function main() {
         status: ceo?.status || 'not_started',
         model: config.ceoModel,
         sessionAge: ceo ? formatDuration(Date.now() - new Date(ceo.info.startedAt).getTime()) : '0s',
-        tokensToday: ceo?.info.tokensInput ?? 0 + (ceo?.info.tokensOutput ?? 0),
+        tokensToday: (ceo?.info.tokensInput ?? 0) + (ceo?.info.tokensOutput ?? 0),
         costToday: safety.getDailySpend(),
       },
       workers: {
@@ -478,16 +479,19 @@ async function main() {
     };
   }
 
+  // ─── Cost Tracking ───
+
+  adapter.setOnCostUpdate((agentId, costUsd, tokensInput, tokensOutput) => {
+    safety.recordSpend(costUsd);
+    logger.info({ agentId, costUsd: costUsd.toFixed(4), tokensInput, tokensOutput }, 'Cost update');
+  });
+
   // ─── Worker lifecycle ───
 
-  mcp.setOnWorkerSpawned((agentId, taskId) => {
-    // Set up output streaming
-    const session = adapter.getSession(agentId);
-    if (session) {
-      // Output is already going through the adapter; we need to wire it to broadcast
-      // This is handled by the onOutput callback passed during spawn
-    }
+  // Wire worker output streaming to dashboard
+  mcp.setOnWorkerOutput((agentId: string) => onAgentOutput(agentId));
 
+  mcp.setOnWorkerSpawned((agentId, taskId) => {
     broadcast({
       type: 'agent_status',
       agentId,
@@ -496,38 +500,60 @@ async function main() {
     });
   });
 
-  // Worker timeout checker
-  setInterval(() => {
+  // Wire spawn approval notifications to dashboard
+  mcp.setOnSpawnApprovalNeeded((taskId, task) => {
+    broadcast({
+      type: 'spawn_approval_request',
+      data: { taskId, title: task.title, model: task.model },
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Shutdown endpoint
+  app.post('/api/shutdown', async (_req, res) => {
+    res.json({ shutting_down: true });
+    shutdown('API');
+  });
+
+  // Worker timeout checker + system health loop
+  let ceoRestartPending = false;
+
+  setInterval(async () => {
+    // Worker timeouts
     for (const session of adapter.getActiveSessions('worker')) {
       const startTime = new Date(session.info.startedAt).getTime();
       if (safety.isWorkerTimedOut(startTime)) {
         logger.warn({ agentId: session.id, taskId: session.taskId }, 'Worker timed out');
-        adapter.killSession(session.id).then(() => {
+        try {
+          await adapter.killSession(session.id);
           if (session.taskId) {
-            tasks.updateTask(session.taskId, {
+            const current = tasks.getTask(session.taskId);
+            await tasks.updateTask(session.taskId, {
               status: 'failed',
               notes: 'Worker timed out',
-              retryCount: (tasks.getTask(session.taskId)?.retryCount ?? 0) + 1,
+              retryCount: (current?.retryCount ?? 0) + 1,
             });
             heartbeat.notifyTaskChange();
             broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
           }
-        });
+        } catch (err) {
+          logger.error({ err, agentId: session.id }, 'Failed to kill timed-out worker');
+        }
       }
     }
 
-    // CEO session age check
+    // CEO session age check (guarded against double restart)
     const ceo = adapter.getCeoSession();
-    if (ceo && safety.shouldRestartCeo(new Date(ceo.info.startedAt).getTime())) {
+    if (!ceoRestartPending && ceo && safety.shouldRestartCeo(new Date(ceo.info.startedAt).getTime())) {
+      ceoRestartPending = true;
       logger.info('CEO session age limit reached — restarting');
-      adapter.sendMessage(ceo.id, 'Server is restarting your session. Write any critical context to MEMORY.md now.').then(() => {
-        setTimeout(async () => {
-          await adapter.killSession(ceo.id);
-          startCeo();
-        }, 30000);
-      }).catch(() => {
-        adapter.killSession(ceo.id).then(() => startCeo());
-      });
+      try {
+        await adapter.sendMessage(ceo.id, 'Session age limit reached. Write critical context to MEMORY.md now.');
+        await new Promise((r) => setTimeout(r, 15000));
+      } catch { /* ignore */ }
+      await adapter.killSession(ceo.id);
+      await startCeo();
+      ceoRestartPending = false;
     }
 
     // Inactivity check
@@ -542,6 +568,9 @@ async function main() {
       });
     }
 
+    // MEMORY.md rotation check
+    rotateMemory(join(config.projectPath, 'ceo'), logger);
+
     // Cost update broadcast
     broadcast({
       type: 'cost_update',
@@ -553,12 +582,33 @@ async function main() {
       },
       timestamp: new Date().toISOString(),
     });
-  }, 30000); // Check every 30 seconds
+  }, 30000);
 
   // ─── Start CEO ───
 
   async function startCeo() {
-    const ceo = await adapter.spawnSession(
+    // Build MCP server config for the CEO using the SDK's createSdkMcpServer
+    let mcpServers: Record<string, unknown> | undefined;
+    const { getCreateSdkMcpServerFn, getToolFn } = await import('./agent-adapter.js');
+    const createMcp = getCreateSdkMcpServerFn();
+    const toolBuilder = getToolFn();
+
+    if (createMcp && toolBuilder) {
+      // Build SDK MCP tools using the tool() helper
+      const z = await import('zod').then(m => m.z).catch(() => null);
+      if (z) {
+        const sdkTools = buildSdkMcpTools(mcp, z, toolBuilder);
+        const mcpConfig = createMcp({ name: 'eunomia', tools: sdkTools });
+        mcpServers = { eunomia: mcpConfig };
+        logger.info({ toolCount: sdkTools.length }, 'MCP server created for CEO');
+      }
+    }
+
+    if (!mcpServers) {
+      logger.warn('Could not create SDK MCP server — CEO will run without MCP tools');
+    }
+
+    const ceoSession = await adapter.spawnSession(
       'ceo',
       {
         model: config.ceoModel,
@@ -566,17 +616,18 @@ async function main() {
         additionalDirectories: [config.projectPath],
         persistSession: true,
         permissionMode: 'auto',
+        mcpServers,
       },
       onAgentOutput('ceo'),
     );
 
-    heartbeat.setCeoAgentId(ceo.id);
+    heartbeat.setCeoAgentId(ceoSession.id);
     heartbeat.start();
 
-    logger.info({ agentId: ceo.id, model: config.ceoModel }, 'CEO started');
+    logger.info({ agentId: ceoSession.id, model: config.ceoModel }, 'CEO started');
     broadcast({
       type: 'agent_status',
-      agentId: ceo.id,
+      agentId: ceoSession.id,
       data: { status: 'running', role: 'ceo' },
       timestamp: new Date().toISOString(),
     });
@@ -655,6 +706,86 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(0)}MB`;
+}
+
+// ─── MEMORY.md Rotation ───
+
+function rotateMemory(ceoDir: string, logger: Logger): void {
+  const memPath = join(ceoDir, 'MEMORY.md');
+  const archivePath = join(ceoDir, 'MEMORY-archive.md');
+
+  if (!existsSync(memPath)) return;
+
+  try {
+    const content = readFileSync(memPath, 'utf-8');
+    const lines = content.split('\n');
+
+    if (lines.length <= 50) return;
+
+    // Move all content to archive (append)
+    const archiveContent = existsSync(archivePath) ? readFileSync(archivePath, 'utf-8') : '';
+    const newArchive = archiveContent + '\n---\n' + content;
+
+    // Cap archive at 200 lines (keep newest)
+    const archiveLines = newArchive.split('\n');
+    const cappedArchive = archiveLines.length > 200
+      ? archiveLines.slice(archiveLines.length - 200).join('\n')
+      : newArchive;
+
+    writeFileSync(archivePath, cappedArchive, 'utf-8');
+    writeFileSync(memPath, '# Memory\n\n_Rotated to MEMORY-archive.md. Write new entries below._\n', 'utf-8');
+
+    logger.info({ lines: lines.length }, 'MEMORY.md rotated');
+  } catch (err) {
+    logger.error({ err }, 'Failed to rotate MEMORY.md');
+  }
+}
+
+// ─── SDK MCP Tool Builder ───
+
+function buildSdkMcpTools(mcp: McpServer, z: typeof import('zod').z, toolFn: (...args: unknown[]) => unknown): unknown[] {
+  const tool = toolFn as (
+    name: string,
+    description: string,
+    schema: Record<string, unknown>,
+    handler: (args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>,
+  ) => unknown;
+
+  return [
+    tool('tasks_list', 'List tasks from TASKS.md, optionally filtered by status', {
+      status: z.enum(['planned', 'active', 'done', 'failed']).optional(),
+    }, async (args) => mcp.handleToolCall('tasks_list', args)),
+
+    tool('tasks_create', 'Create a new task in Planned status', {
+      title: z.string(),
+      description: z.string().optional(),
+      model: z.enum(['opus', 'sonnet', 'haiku']).optional(),
+      priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+      maxBudgetUsd: z.number().optional(),
+    }, async (args) => mcp.handleToolCall('tasks_create', args)),
+
+    tool('tasks_update', 'Update a task status, notes, priority, or model', {
+      taskId: z.string(),
+      status: z.enum(['planned', 'active', 'done', 'failed']).optional(),
+      notes: z.string().optional(),
+      priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+      model: z.enum(['opus', 'sonnet', 'haiku']).optional(),
+    }, async (args) => mcp.handleToolCall('tasks_update', args)),
+
+    tool('spawn_worker', 'Spawn a temporary worker agent for a specific planned task', {
+      taskId: z.string(),
+    }, async (args) => mcp.handleToolCall('spawn_worker', args)),
+
+    tool('worker_status', 'Check if a worker is running, its elapsed time and token spend', {
+      agentId: z.string(),
+    }, async (args) => mcp.handleToolCall('worker_status', args)),
+
+    tool('kill_worker', 'Force-stop a running worker', {
+      agentId: z.string(),
+    }, async (args) => mcp.handleToolCall('kill_worker', args)),
+
+    tool('list_workers', 'List all active workers with task, runtime, and cost', {}, async (args) => mcp.handleToolCall('list_workers', args)),
+  ];
 }
 
 main().catch((err) => {

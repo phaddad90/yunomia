@@ -95,7 +95,8 @@ export class SafetyModule {
     const resolvedWorkerDir = resolve(workerDir);
 
     return (tool: string, input: Record<string, unknown>) => {
-      if (tool === 'Write' || tool === 'Edit') {
+      const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+    if (WRITE_TOOLS.has(tool)) {
         const targetPath = input.file_path as string;
         if (targetPath && !resolve(targetPath).startsWith(resolvedWorkerDir)) {
           this.logger.warn({ tool, targetPath, workerDir: resolvedWorkerDir }, 'Worker write blocked — outside scope');

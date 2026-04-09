@@ -9,20 +9,25 @@ let workerTerminals = {};
 let activeTerminal = 'ceo';
 let paused = false;
 let lastPromptTime = 0;
-const PROMPT_COOLDOWN = 5000; // 5 seconds
+let statusFailCount = 0;
+const PROMPT_COOLDOWN = 5000;
 
 // ─── WebSocket ───
 
 function connectWs() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${protocol}//${location.host}/ws`);
+  const socket = new WebSocket(`${protocol}//${location.host}/ws`);
 
-  ws.onopen = () => {
+  socket.onopen = () => {
+    ws = socket; // only assign to global once open
     showBanner('Connected to Eunomia', 'info');
     setTimeout(() => hideBanner(), 3000);
+    // Re-sync state on reconnect
+    refreshStatus();
+    fetch('/api/tasks').then(r => r.json()).then(data => renderTasks(data)).catch(() => {});
   };
 
-  ws.onmessage = (event) => {
+  socket.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data);
       handleWsMessage(msg);
@@ -31,13 +36,14 @@ function connectWs() {
     }
   };
 
-  ws.onclose = () => {
+  socket.onclose = () => {
+    if (ws === socket) ws = null; // don't clobber a newer connection
     showBanner('Disconnected — reconnecting...', 'warning');
     setTimeout(connectWs, 3000);
   };
 
-  ws.onerror = () => {
-    ws.close();
+  socket.onerror = () => {
+    socket.close(); // close THIS socket, not whatever ws points to
   };
 }
 
@@ -85,7 +91,11 @@ function initTerminals() {
   ceoFitAddon = new FitAddon.FitAddon();
   ceoTerminal.loadAddon(ceoFitAddon);
   ceoTerminal.open(document.getElementById('terminal-ceo'));
-  ceoFitAddon.fit();
+
+  // Fit after layout settles
+  requestAnimationFrame(() => {
+    ceoFitAddon.fit();
+  });
 
   ceoTerminal.writeln('\x1b[1;35m  Eunomia CEO Terminal\x1b[0m');
   ceoTerminal.writeln('\x1b[90m  Waiting for CEO agent to start...\x1b[0m\r\n');
@@ -113,8 +123,11 @@ function handleTerminalOutput(agentId, data) {
 function createWorkerTerminal(agentId) {
   const container = document.createElement('div');
   container.id = `terminal-${agentId}`;
-  container.style.display = 'none';
   container.style.height = '100%';
+  container.style.width = '100%';
+  container.style.position = 'absolute';
+  container.style.inset = '0';
+  // Temporarily visible for fit measurement
   document.querySelector('.terminal-main').appendChild(container);
 
   const terminal = new Terminal({
@@ -132,10 +145,11 @@ function createWorkerTerminal(agentId) {
   const fitAddon = new FitAddon.FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(container);
+  fitAddon.fit(); // fit while visible
+
+  container.style.display = 'none'; // hide after fit
 
   workerTerminals[agentId] = { terminal, fitAddon, container };
-
-  // Add pill to worker bar
   addWorkerPill(agentId);
 }
 
@@ -148,28 +162,24 @@ function addWorkerPill(agentId) {
   pill.className = 'worker-pill';
   pill.id = `pill-${agentId}`;
   pill.onclick = () => showWorkerTerminal(agentId);
-  pill.innerHTML = `<span class="dot"></span>${agentId.slice(0, 12)}`;
+  pill.innerHTML = `<span class="dot"></span>${escapeHtml(agentId.slice(0, 16))}`;
   bar.appendChild(pill);
 }
 
 function showWorkerTerminal(agentId) {
   if (!workerTerminals[agentId]) return;
 
-  // Hide current terminal
   document.getElementById('terminal-ceo').style.display = 'none';
   Object.values(workerTerminals).forEach(w => w.container.style.display = 'none');
 
-  // Show selected
   workerTerminals[agentId].container.style.display = 'block';
   workerTerminals[agentId].fitAddon.fit();
   activeTerminal = agentId;
 
-  // Update pills
   document.querySelectorAll('.worker-pill').forEach(p => p.classList.remove('active'));
   const pill = document.getElementById(`pill-${agentId}`);
   if (pill) pill.classList.add('active');
 
-  // Show back button
   document.getElementById('back-to-ceo').style.display = 'block';
 }
 
@@ -207,23 +217,23 @@ function renderTasks(state) {
       for (const t of tasks) {
         const priorityClass = t.priority === 'critical' ? 'priority-critical' : t.priority === 'high' ? 'priority-high' : '';
         html += `
-          <div class="task-item" data-id="${t.id}">
+          <div class="task-item" data-id="${escapeHtml(t.id)}">
             <span class="task-checkbox ${checkClass[status]}">${checkmarks[status]}</span>
             <div class="task-body">
               <div class="task-title">${escapeHtml(t.title)}</div>
               <div class="task-meta">
-                <span class="task-tag">${t.id}</span>
-                <span class="task-tag model">${t.model}</span>
-                <span class="task-tag ${priorityClass}">${t.priority}</span>
+                <span class="task-tag">${escapeHtml(t.id)}</span>
+                <span class="task-tag model">${escapeHtml(t.model)}</span>
+                <span class="task-tag ${priorityClass}">${escapeHtml(t.priority)}</span>
                 <span class="task-tag">$${t.maxBudgetUsd.toFixed(2)}</span>
                 ${t.tokenCost?.totalUsd > 0 ? `<span class="task-tag" style="color: var(--green);">$${t.tokenCost.totalUsd.toFixed(2)} actual</span>` : ''}
                 ${t.notes ? `<span style="color: var(--text-muted);">${escapeHtml(t.notes)}</span>` : ''}
               </div>
             </div>
             <div class="task-actions">
-              ${status === 'failed' ? `<button class="btn" onclick="retryTask('${t.id}')">Retry</button>` : ''}
-              ${status === 'planned' ? `<button class="btn btn-danger" onclick="deleteTask('${t.id}')">Remove</button>` : ''}
-              ${status === 'active' ? `<button class="btn btn-danger" onclick="failTask('${t.id}')">Stop</button>` : ''}
+              ${status === 'failed' ? `<button class="btn" data-action="retry" data-id="${escapeHtml(t.id)}">Retry</button>` : ''}
+              ${status === 'planned' ? `<button class="btn btn-danger" data-action="remove" data-id="${escapeHtml(t.id)}">Remove</button>` : ''}
+              ${status === 'active' ? `<button class="btn btn-danger" data-action="stop" data-id="${escapeHtml(t.id)}">Stop</button>` : ''}
             </div>
           </div>`;
       }
@@ -232,6 +242,17 @@ function renderTasks(state) {
   }
 
   container.innerHTML = html;
+
+  // Attach event listeners (not inline onclick — prevents XSS)
+  container.querySelectorAll('[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.getAttribute('data-action');
+      const id = btn.getAttribute('data-id');
+      if (action === 'retry') retryTask(id);
+      else if (action === 'remove') deleteTask(id);
+      else if (action === 'stop') failTask(id);
+    });
+  });
 }
 
 async function addTask() {
@@ -252,7 +273,7 @@ async function retryTask(id) {
   await fetch(`/api/tasks/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'planned', notes: '' }),
+    body: JSON.stringify({ status: 'planned', notes: '', retryCount: 0 }),
   });
 }
 
@@ -265,7 +286,6 @@ async function deleteTask(id) {
 }
 
 async function failTask(id) {
-  // Find the worker for this task and kill it
   const agents = await (await fetch('/api/agents')).json();
   const worker = agents.find(a => a.taskId === id && a.role === 'worker');
   if (worker) {
@@ -290,7 +310,8 @@ async function refreshStatus() {
       fetch('/api/safety').then(r => r.json()),
     ]);
 
-    // CEO status
+    statusFailCount = 0; // reset on success
+
     document.getElementById('ceo-status-rows').innerHTML = `
       ${statusRow('Status', health.ceo.status, health.ceo.status === 'running' ? 'green' : 'amber')}
       ${statusRow('Model', health.ceo.model)}
@@ -301,7 +322,6 @@ async function refreshStatus() {
       ${statusRow('Next In', heartbeat.nextFireIn + 's')}
     `;
 
-    // Workers
     const workers = agents.filter(a => a.role === 'worker');
     if (workers.length === 0) {
       document.getElementById('worker-status-rows').innerHTML =
@@ -314,14 +334,12 @@ async function refreshStatus() {
       `).join('');
     }
 
-    // Cost
     document.getElementById('cost-status-rows').innerHTML = `
       ${statusRow('Today', '$' + health.budget.spent.toFixed(2), health.budget.percent >= 80 ? 'amber' : '')}
       ${statusRow('Budget', '$' + health.budget.limit.toFixed(2))}
-      ${statusRow('Used', health.budget.percent.toFixed(1) + '%', health.budget.percent >= 80 ? 'amber' : health.budget.percent >= 100 ? 'red' : 'green')}
+      ${statusRow('Used', health.budget.percent.toFixed(1) + '%', health.budget.percent >= 100 ? 'red' : health.budget.percent >= 80 ? 'amber' : 'green')}
     `;
 
-    // Safety
     document.getElementById('safety-status-rows').innerHTML = `
       ${statusRow('Paused', safety.paused ? 'Yes' : 'No', safety.paused ? 'amber' : 'green')}
       ${statusRow('Workers', health.workers.active + '/' + health.workers.max)}
@@ -330,18 +348,20 @@ async function refreshStatus() {
       ${statusRow('Approvals Pending', safety.pendingApprovals.length.toString())}
     `;
 
-    // Update status bar
     updateStatusBar(health, heartbeat);
     updateCostBadge(health.budget);
   } catch (e) {
-    // Silently fail — will retry
+    statusFailCount++;
+    if (statusFailCount >= 3) {
+      showBanner('Status polling failed — data may be stale', 'warning');
+    }
   }
 }
 
 function statusRow(label, value, colorClass) {
   return `<div class="status-row">
-    <span class="status-label">${label}</span>
-    <span class="status-value ${colorClass || ''}">${value}</span>
+    <span class="status-label">${escapeHtml(String(label))}</span>
+    <span class="status-value ${colorClass || ''}">${escapeHtml(String(value))}</span>
   </div>`;
 }
 
@@ -355,7 +375,6 @@ function updateStatusBar(health, heartbeat) {
   const hb = document.getElementById('heartbeat-info');
   const bar = document.getElementById('status-bar');
 
-  // CEO state
   const ceoStatus = health.ceo.status;
   if (ceoStatus === 'running') {
     dot.className = 'dot green';
@@ -369,7 +388,6 @@ function updateStatusBar(health, heartbeat) {
   cost.textContent = `$${health.budget.spent.toFixed(2)} today`;
   hb.textContent = `HB: ${heartbeat.intervalMinutes}m`;
 
-  // Bar color
   bar.className = 'status-bar';
   if (health.budget.percent >= 100) bar.classList.add('danger');
   else if (health.budget.percent >= 80 || health.status === 'degraded') bar.classList.add('warning');
@@ -386,12 +404,8 @@ function updateCostBadge(budget) {
 // ─── Agent Status Events ───
 
 function handleAgentStatus(agentId, data) {
-  if (data.role === 'ceo' || !agentId.startsWith('worker-')) {
-    // CEO status update
-    return;
-  }
+  if (data.role === 'ceo') return;
 
-  // Worker status
   const pill = document.getElementById(`pill-${agentId}`);
   if (pill) {
     const dot = pill.querySelector('.dot');
@@ -422,10 +436,27 @@ function handleCostUpdate(data) {
 }
 
 function handleSpawnApproval(data) {
-  showBanner(
-    `CEO wants to spawn worker for ${data.taskId}. <button class="btn btn-accent" onclick="approveSpawn('${data.taskId}')">Approve</button> <button class="btn btn-danger" onclick="rejectSpawn('${data.taskId}')">Reject</button>`,
-    'info'
-  );
+  const banner = document.getElementById('banner');
+  banner.textContent = '';
+
+  const text = document.createTextNode(`CEO wants to spawn worker for ${data.taskId} (${data.title}). `);
+  banner.appendChild(text);
+
+  const approveBtn = document.createElement('button');
+  approveBtn.className = 'btn btn-accent';
+  approveBtn.textContent = 'Approve';
+  approveBtn.addEventListener('click', () => approveSpawn(data.taskId));
+  banner.appendChild(approveBtn);
+
+  banner.appendChild(document.createTextNode(' '));
+
+  const rejectBtn = document.createElement('button');
+  rejectBtn.className = 'btn btn-danger';
+  rejectBtn.textContent = 'Reject';
+  rejectBtn.addEventListener('click', () => rejectSpawn(data.taskId));
+  banner.appendChild(rejectBtn);
+
+  banner.className = 'banner visible';
 }
 
 // ─── Controls ───
@@ -435,7 +466,6 @@ async function sendPrompt() {
   const message = input.value.trim();
   if (!message) return;
 
-  // Cooldown
   if (Date.now() - lastPromptTime < PROMPT_COOLDOWN) return;
   lastPromptTime = Date.now();
 
@@ -459,7 +489,7 @@ async function togglePause() {
 async function stopAll() {
   if (!confirm('Stop all agents and shut down?')) return;
   showBanner('Shutting down...', 'danger');
-  // Server will handle graceful shutdown
+  await fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
 }
 
 async function approveSpawn(taskId) {
@@ -481,8 +511,10 @@ function switchTab(tab) {
   document.getElementById(`tab-${tab}`).classList.add('active');
 
   if (tab === 'terminals') {
-    if (activeTerminal === 'ceo' && ceoFitAddon) ceoFitAddon.fit();
-    else if (workerTerminals[activeTerminal]?.fitAddon) workerTerminals[activeTerminal].fitAddon.fit();
+    requestAnimationFrame(() => {
+      if (activeTerminal === 'ceo' && ceoFitAddon) ceoFitAddon.fit();
+      else if (workerTerminals[activeTerminal]?.fitAddon) workerTerminals[activeTerminal].fitAddon.fit();
+    });
   }
 
   if (tab === 'status') refreshStatus();
@@ -492,7 +524,7 @@ function switchTab(tab) {
 
 function showBanner(text, type) {
   const banner = document.getElementById('banner');
-  banner.innerHTML = text;
+  banner.textContent = text; // textContent, not innerHTML — safe
   banner.className = 'banner visible';
   if (type === 'warning') banner.classList.add('warning');
   if (type === 'danger') banner.classList.add('danger');
@@ -516,12 +548,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initTerminals();
   connectWs();
 
-  // Poll status every 5 seconds
   setInterval(refreshStatus, 5000);
   refreshStatus();
-
-  // Fetch project name
-  fetch('/health').then(r => r.json()).then(h => {
-    // Will be populated from server
-  }).catch(() => {});
 });

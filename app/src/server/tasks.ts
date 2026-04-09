@@ -8,10 +8,8 @@ export class TaskManager {
   private filePath: string;
   private auditPath: string;
   private logger: Logger;
-  private writing = false;
-  private writeQueue: Array<() => void> = [];
-  private fileWatcher: ReturnType<typeof watchFile> | null = null;
   private lastWriteTime = 0;
+  private mutexPromise: Promise<void> = Promise.resolve();
 
   constructor(projectPath: string, logger: Logger) {
     this.filePath = join(projectPath, 'TASKS.md');
@@ -19,6 +17,27 @@ export class TaskManager {
     this.logger = logger;
     this.load();
     this.startFileWatch();
+  }
+
+  // ─── Serialisation ───
+  // All mutations go through this queue to prevent concurrent read-modify-write.
+  // Each operation acquires the lock, runs fn(), flushes to disk, then releases.
+
+  private async serialise<T>(fn: () => T): Promise<T> {
+    let release: () => void;
+    const acquired = new Promise<void>((resolve) => { release = resolve; });
+    const previous = this.mutexPromise;
+    this.mutexPromise = acquired;
+
+    await previous; // wait for previous operation to finish
+
+    try {
+      const result = fn();
+      this.flush();
+      return result;
+    } finally {
+      release!();
+    }
   }
 
   // ─── File I/O ───
@@ -57,30 +76,16 @@ export class TaskManager {
     }
   }
 
-  private async serialise<T>(fn: () => T): Promise<T> {
-    if (this.writing) {
-      return new Promise((resolve) => {
-        this.writeQueue.push(() => resolve(fn()));
-      });
-    }
-    this.writing = true;
-    try {
-      const result = fn();
-      this.flush();
-      return result;
-    } finally {
-      this.writing = false;
-      const next = this.writeQueue.shift();
-      if (next) next();
-    }
-  }
-
   private startFileWatch(): void {
-    // Watch for external edits (human editing TASKS.md directly)
     watchFile(this.filePath, { interval: 2000 }, (curr, prev) => {
-      if (curr.mtimeMs > prev.mtimeMs && curr.mtimeMs > this.lastWriteTime + 1000) {
+      // Reload if externally modified (not by our own writes)
+      if (curr.mtimeMs > prev.mtimeMs && curr.mtimeMs > this.lastWriteTime + 2000) {
         this.logger.info('TASKS.md modified externally — reloading');
-        this.load();
+        // Reload through the mutex to prevent mid-write clobber
+        this.serialise(() => {
+          const content = readFileSync(this.filePath, 'utf-8');
+          this.tasks = this.parseTasksMd(content);
+        });
       }
     });
   }
@@ -99,28 +104,30 @@ export class TaskManager {
     for (const line of lines) {
       const trimmed = line.trim();
 
-      // Section headers
       if (trimmed === '## Planned') { currentStatus = 'planned'; continue; }
       if (trimmed === '## Active') { currentStatus = 'active'; continue; }
       if (trimmed === '## Done') { currentStatus = 'done'; continue; }
       if (trimmed === '## Failed') { currentStatus = 'failed'; continue; }
 
-      // Task lines: - [ ] `task-001` Title [model] [priority] [$budget] — notes
+      // Task lines: - [x] `task-001` Title [model] [priority] [$budget] — notes
       const taskMatch = trimmed.match(/^- \[(.)\] `([^`]+)` (.+)$/);
       if (!taskMatch) continue;
 
       const [, , id, rest] = taskMatch;
 
-      // Extract bracketed metadata
-      const modelMatch = rest.match(/\[(opus|sonnet|haiku)\]/i);
-      const priorityMatch = rest.match(/\[(low|medium|high|critical)\]/i);
-      const budgetMatch = rest.match(/\[\$([0-9.]+)\]/);
-      const actualCostMatch = rest.match(/\[\$([0-9.]+) actual\]/);
-      const notesMatch = rest.match(/\s+[—–-]\s+(.+)$/);
+      // Extract metadata from BEFORE the notes separator
+      const notesSepIdx = rest.search(/\s+[—–-]\s+/);
+      const metaPart = notesSepIdx > 0 ? rest.substring(0, notesSepIdx) : rest;
+      const notesPart = notesSepIdx > 0 ? rest.substring(notesSepIdx).replace(/^\s+[—–-]\s+/, '') : '';
 
-      // Title is everything before the first bracket
-      const titleEnd = rest.search(/\s*\[/);
-      const title = titleEnd > 0 ? rest.substring(0, titleEnd).trim() : rest.split(' — ')[0].trim();
+      const modelMatch = metaPart.match(/\[(opus|sonnet|haiku)\]/i);
+      const priorityMatch = metaPart.match(/\[(low|medium|high|critical)\]/i);
+      const budgetMatch = metaPart.match(/\[\$([0-9.]+)\]/);
+      const actualCostMatch = metaPart.match(/\[\$([0-9.]+) actual\]/);
+
+      // Title is everything before the first bracket in the meta part
+      const titleEnd = metaPart.search(/\s*\[/);
+      const title = titleEnd > 0 ? metaPart.substring(0, titleEnd).trim() : metaPart.trim();
 
       const task: Task = {
         id,
@@ -141,10 +148,9 @@ export class TaskManager {
           output: 0,
           totalUsd: actualCostMatch ? parseFloat(actualCostMatch[1]) : 0,
         },
-        notes: notesMatch?.[1] || '',
+        notes: notesPart,
       };
 
-      // Retry count from notes
       const retryMatch = task.notes.match(/Retry limit reached \((\d+)\/(\d+)\)/);
       if (retryMatch) {
         task.retryCount = parseInt(retryMatch[1]);
@@ -158,13 +164,7 @@ export class TaskManager {
   }
 
   private renderTasksMd(): string {
-    const sections: Record<TaskStatus, Task[]> = {
-      planned: [],
-      active: [],
-      done: [],
-      failed: [],
-    };
-
+    const sections: Record<TaskStatus, Task[]> = { planned: [], active: [], done: [], failed: [] };
     for (const task of this.tasks) {
       sections[task.status].push(task);
     }
@@ -177,12 +177,11 @@ export class TaskManager {
       ['done', 'Done'],
       ['failed', 'Failed'],
     ] as const) {
-      md += `\n## ${label}\n`;
+      md += `\n## ${label}\n\n`;
       const statusTasks = sections[status];
       if (statusTasks.length === 0) {
-        md += '\n_No tasks_\n';
+        md += '_No tasks_\n';
       } else {
-        md += '\n';
         for (const t of statusTasks) {
           const marker = status === 'done' ? 'x' : status === 'active' ? '~' : status === 'failed' ? '!' : ' ';
           let line = `- [${marker}] \`${t.id}\` ${t.title} [${t.model}] [${t.priority}] [$${t.maxBudgetUsd.toFixed(2)}]`;
@@ -274,17 +273,12 @@ export class TaskManager {
   }
 
   getState(): TasksState {
-    return {
-      tasks: [...this.tasks],
-      lastModified: new Date().toISOString(),
-    };
+    return { tasks: [...this.tasks], lastModified: new Date().toISOString() };
   }
 
   getStatusCounts(): Record<TaskStatus, number> {
     const counts: Record<TaskStatus, number> = { planned: 0, active: 0, done: 0, failed: 0 };
-    for (const t of this.tasks) {
-      counts[t.status]++;
-    }
+    for (const t of this.tasks) counts[t.status]++;
     return counts;
   }
 
@@ -322,17 +316,9 @@ export class TaskManager {
   }
 
   private audit(actor: 'ceo' | 'human' | 'system', action: string, taskId: string | undefined, detail: string): void {
-    const entry: AuditEntry = {
-      timestamp: new Date().toISOString(),
-      actor,
-      action,
-      taskId,
-      detail,
-    };
+    const entry: AuditEntry = { timestamp: new Date().toISOString(), actor, action, taskId, detail };
     try {
       appendFileSync(this.auditPath, JSON.stringify(entry) + '\n');
-    } catch {
-      // Audit write failure is non-fatal
-    }
+    } catch { /* non-fatal */ }
   }
 }
