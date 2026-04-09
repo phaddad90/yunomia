@@ -110,13 +110,16 @@ function initTerminals() {
 }
 
 function handleTerminalOutput(agentId, data) {
+  // xterm.js needs \r\n — bare \n moves cursor down without returning to column 0
+  const normalized = typeof data === 'string' ? data.replace(/\r?\n/g, '\r\n') : data;
+
   if (!agentId || agentId === 'ceo') {
-    if (ceoTerminal) ceoTerminal.write(data);
+    if (ceoTerminal) ceoTerminal.write(normalized);
   } else {
     if (!workerTerminals[agentId]) {
       createWorkerTerminal(agentId);
     }
-    workerTerminals[agentId].terminal.write(data);
+    workerTerminals[agentId].terminal.write(normalized);
   }
 }
 
