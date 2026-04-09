@@ -2,6 +2,7 @@ import type { Logger } from 'pino';
 import type { SafetyModule } from './safety.js';
 import type { TaskManager } from './tasks.js';
 import type { AgentAdapter } from './agent-adapter.js';
+import type { MetricsCollector } from './metrics.js';
 
 /**
  * Adaptive heartbeat scheduler.
@@ -28,6 +29,7 @@ export class HeartbeatScheduler {
   private safety: SafetyModule;
   private tasks: TaskManager;
   private adapter: AgentAdapter;
+  private metrics?: MetricsCollector;
   private ceoAgentId: string | null = null;
 
   private state: HeartbeatState = 'stopped';
@@ -45,11 +47,13 @@ export class HeartbeatScheduler {
     safety: SafetyModule,
     tasks: TaskManager,
     adapter: AgentAdapter,
+    metrics?: MetricsCollector,
   ) {
     this.logger = logger;
     this.safety = safety;
     this.tasks = tasks;
     this.adapter = adapter;
+    this.metrics = metrics;
     this.baseIntervalMs = safety.getConfig().heartbeatIntervalMinutes * 60 * 1000;
     this.currentIntervalMs = this.baseIntervalMs;
   }
@@ -151,6 +155,11 @@ export class HeartbeatScheduler {
     // Safety checks
     if (!this.safety.shouldFireHeartbeat()) {
       this.logger.info('Heartbeat skipped (safety block)');
+      this.metrics?.record('heartbeat', {
+        skipped: true,
+        intervalMinutes: Math.round(this.currentIntervalMs / 60000),
+        tasksChanged: false,
+      });
       this.pause();
       return;
     }
@@ -158,6 +167,11 @@ export class HeartbeatScheduler {
     // Check inactivity
     if (this.safety.isInactive()) {
       this.logger.info({ inactiveMinutes: this.safety.getInactivityMinutes() }, 'Heartbeat paused (human inactive)');
+      this.metrics?.record('heartbeat', {
+        skipped: true,
+        intervalMinutes: Math.round(this.currentIntervalMs / 60000),
+        tasksChanged: false,
+      });
       this.pause();
       return;
     }
@@ -193,6 +207,16 @@ export class HeartbeatScheduler {
         this.logger.error({ err }, 'Heartbeat failed to send to CEO');
       }
     }
+
+    // Record heartbeat metric
+    const ceoSession = this.ceoAgentId ? this.adapter.getSession(this.ceoAgentId) : null;
+    this.metrics?.record('heartbeat', {
+      skipped: false,
+      intervalMinutes: Math.round(this.currentIntervalMs / 60000),
+      tasksChanged,
+      tokensInput: ceoSession?.info.tokensInput,
+      tokensOutput: ceoSession?.info.tokensOutput,
+    });
 
     // Schedule next
     this.scheduleNext();

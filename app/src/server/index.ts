@@ -11,6 +11,7 @@ import { TaskManager } from './tasks.js';
 import { AgentAdapter } from './agent-adapter.js';
 import { HeartbeatScheduler } from './heartbeat.js';
 import { McpServer } from './mcp-server.js';
+import { MetricsCollector } from './metrics.js';
 import type { EunomiaConfig, WsMessage, HealthResponse } from './types.js';
 import { DEFAULT_CONFIG, DEFAULT_SAFETY_CONFIG } from './types.js';
 import type { Logger } from 'pino';
@@ -245,8 +246,9 @@ async function main() {
     logger.warn({ count: orphaned }, 'Cleaned up orphaned tasks');
   }
 
-  const heartbeat = new HeartbeatScheduler(logger, safety, tasks, adapter);
-  const mcp = new McpServer(tasks, adapter, safety, heartbeat, logger, config.projectPath);
+  const metrics = new MetricsCollector(config.projectPath, logger);
+  const heartbeat = new HeartbeatScheduler(logger, safety, tasks, adapter, metrics);
+  const mcp = new McpServer(tasks, adapter, safety, heartbeat, logger, config.projectPath, metrics);
 
   // ─── Express + HTTP ───
 
@@ -304,6 +306,7 @@ async function main() {
 
   app.post('/api/tasks', async (req, res) => {
     safety.recordHumanInteraction();
+    metrics.record('human_interaction', { action: 'create_task' });
     const task = await tasks.createTask(req.body);
     heartbeat.notifyTaskChange();
     broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
@@ -312,6 +315,7 @@ async function main() {
 
   app.patch('/api/tasks/:id', async (req, res) => {
     safety.recordHumanInteraction();
+    metrics.record('human_interaction', { action: 'update_task' });
     const task = await tasks.updateTask(req.params.id, req.body);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     heartbeat.notifyTaskChange();
@@ -345,6 +349,7 @@ async function main() {
 
   app.post('/api/safety/pause', (_req, res) => {
     safety.recordHumanInteraction();
+    metrics.record('human_interaction', { action: 'pause' });
     safety.pause('Human requested pause');
     heartbeat.pause();
     broadcast({ type: 'safety_alert', data: { action: 'paused' }, timestamp: new Date().toISOString() });
@@ -353,6 +358,7 @@ async function main() {
 
   app.post('/api/safety/resume', (_req, res) => {
     safety.recordHumanInteraction();
+    metrics.record('human_interaction', { action: 'resume' });
     safety.resume();
     heartbeat.resume();
     broadcast({ type: 'safety_alert', data: { action: 'resumed' }, timestamp: new Date().toISOString() });
@@ -361,12 +367,14 @@ async function main() {
 
   app.post('/api/safety/approve/:taskId', (req, res) => {
     safety.recordHumanInteraction();
+    metrics.record('human_interaction', { action: 'approve_spawn' });
     safety.resolveApproval(req.params.taskId, true);
     res.json({ approved: true });
   });
 
   app.post('/api/safety/reject/:taskId', (req, res) => {
     safety.recordHumanInteraction();
+    metrics.record('human_interaction', { action: 'reject_spawn' });
     safety.resolveApproval(req.params.taskId, false);
     res.json({ approved: false });
   });
@@ -382,9 +390,19 @@ async function main() {
     res.json(heartbeat.getState());
   });
 
+  // Metrics API
+  app.get('/api/metrics/summary', (_req, res) => {
+    res.json(metrics.getSummaryJson());
+  });
+
+  app.get('/api/metrics/report', (_req, res) => {
+    res.type('text/markdown').send(metrics.getReportMarkdown(config.projectPath));
+  });
+
   // Prompt CEO
   app.post('/api/prompt', async (req, res) => {
     safety.recordHumanInteraction();
+    metrics.record('human_interaction', { action: 'prompt' });
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: 'Message required' });
 
@@ -402,10 +420,35 @@ async function main() {
   // Kill worker
   app.post('/api/agents/:id/kill', async (req, res) => {
     safety.recordHumanInteraction();
+    metrics.record('human_interaction', { action: 'kill_worker' });
     const session = adapter.getSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'Agent not found' });
 
+    // Capture info before kill destroys it
+    const info = adapter.getSessionInfo(req.params.id);
+
     await adapter.killSession(req.params.id);
+
+    // Record worker_killed metric
+    metrics.record('worker_killed', {
+      taskId: session.taskId || 'unknown',
+      agentId: req.params.id,
+      reason: 'human',
+    });
+
+    // Record worker_completed metric
+    if (info) {
+      metrics.record('worker_completed', {
+        taskId: session.taskId || 'unknown',
+        agentId: req.params.id,
+        model: session.config.model,
+        durationMinutes: Math.round(info.runtime / 60000),
+        tokensInput: info.tokensInput,
+        tokensOutput: info.tokensOutput,
+        costUsd: info.costUsd,
+        success: false,
+      });
+    }
 
     // Mark task as failed
     if (session.taskId) {
@@ -483,6 +526,7 @@ async function main() {
 
   adapter.setOnCostUpdate((agentId, costUsd, tokensInput, tokensOutput) => {
     safety.recordSpend(costUsd);
+    metrics.checkCostMilestone(safety.getDailySpend(), config.safety.maxDailyBudgetUsd);
     logger.info({ agentId, costUsd: costUsd.toFixed(4), tokensInput, tokensOutput }, 'Cost update');
   });
 
@@ -525,7 +569,30 @@ async function main() {
       if (safety.isWorkerTimedOut(startTime)) {
         logger.warn({ agentId: session.id, taskId: session.taskId }, 'Worker timed out');
         try {
+          // Capture info before kill
+          const info = adapter.getSessionInfo(session.id);
+
           await adapter.killSession(session.id);
+
+          // Record metrics
+          metrics.record('worker_killed', {
+            taskId: session.taskId || 'unknown',
+            agentId: session.id,
+            reason: 'timeout',
+          });
+          if (info) {
+            metrics.record('worker_completed', {
+              taskId: session.taskId || 'unknown',
+              agentId: session.id,
+              model: session.config.model,
+              durationMinutes: Math.round(info.runtime / 60000),
+              tokensInput: info.tokensInput,
+              tokensOutput: info.tokensOutput,
+              costUsd: info.costUsd,
+              success: false,
+            });
+          }
+
           if (session.taskId) {
             const current = tasks.getTask(session.taskId);
             await tasks.updateTask(session.taskId, {
@@ -547,6 +614,16 @@ async function main() {
     if (!ceoRestartPending && ceo && safety.shouldRestartCeo(new Date(ceo.info.startedAt).getTime())) {
       ceoRestartPending = true;
       logger.info('CEO session age limit reached — restarting');
+
+      const ceoInfo = adapter.getSessionInfo(ceo.id);
+      const sessionDurationMinutes = ceoInfo ? Math.round(ceoInfo.runtime / 60000) : 0;
+      metrics.record('ceo_restart', {
+        reason: 'session_age',
+        sessionDurationMinutes,
+        totalTokens: ceoInfo ? ceoInfo.tokensInput + ceoInfo.tokensOutput : 0,
+        totalCostUsd: ceoInfo?.costUsd ?? 0,
+      });
+
       try {
         await adapter.sendMessage(ceo.id, 'Session age limit reached. Write critical context to MEMORY.md now.');
         await new Promise((r) => setTimeout(r, 15000));
@@ -653,6 +730,24 @@ async function main() {
     // 3. Kill all workers
     const workers = adapter.getActiveSessions('worker');
     for (const w of workers) {
+      const wInfo = adapter.getSessionInfo(w.id);
+      metrics.record('worker_killed', {
+        taskId: w.taskId || 'unknown',
+        agentId: w.id,
+        reason: 'shutdown',
+      });
+      if (wInfo) {
+        metrics.record('worker_completed', {
+          taskId: w.taskId || 'unknown',
+          agentId: w.id,
+          model: w.config.model,
+          durationMinutes: Math.round(wInfo.runtime / 60000),
+          tokensInput: wInfo.tokensInput,
+          tokensOutput: wInfo.tokensOutput,
+          costUsd: wInfo.costUsd,
+          success: false,
+        });
+      }
       if (w.taskId) {
         await tasks.updateTask(w.taskId, { status: 'failed', notes: 'Server shutdown' });
       }
@@ -662,10 +757,19 @@ async function main() {
     // 4. Kill CEO
     if (ceo) await adapter.killSession(ceo.id);
 
-    // 5. Cleanup
+    // 5. Generate daily metrics summary and report
+    try {
+      metrics.generateDailySummary();
+      metrics.generateDailyReport(config.projectPath);
+      logger.info('Daily metrics summary and report generated');
+    } catch (err) {
+      logger.error({ err }, 'Failed to generate daily metrics on shutdown');
+    }
+
+    // 6. Cleanup
     tasks.destroy();
 
-    // 6. Close WebSockets
+    // 7. Close WebSockets
     for (const client of clients) {
       client.close(1001, 'Server shutting down');
     }

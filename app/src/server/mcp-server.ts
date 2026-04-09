@@ -2,6 +2,7 @@ import type { TaskManager } from './tasks.js';
 import type { AgentAdapter } from './agent-adapter.js';
 import type { SafetyModule } from './safety.js';
 import type { HeartbeatScheduler } from './heartbeat.js';
+import type { MetricsCollector } from './metrics.js';
 import type { ModelChoice, TaskPriority } from './types.js';
 import type { Logger } from 'pino';
 import { join } from 'path';
@@ -35,6 +36,7 @@ export class McpServer {
   private heartbeat: HeartbeatScheduler;
   private logger: Logger;
   private projectPath: string;
+  private metrics?: MetricsCollector;
   private onWorkerSpawned?: (agentId: string, taskId: string) => void;
   private onWorkerOutput?: (agentId: string) => (data: string) => void;
   private onSpawnApprovalNeeded?: (taskId: string, task: { title: string; model: string }) => void;
@@ -46,6 +48,7 @@ export class McpServer {
     heartbeat: HeartbeatScheduler,
     logger: Logger,
     projectPath: string,
+    metrics?: MetricsCollector,
   ) {
     this.tasks = tasks;
     this.adapter = adapter;
@@ -53,6 +56,7 @@ export class McpServer {
     this.heartbeat = heartbeat;
     this.logger = logger;
     this.projectPath = projectPath;
+    this.metrics = metrics;
   }
 
   setOnWorkerSpawned(cb: (agentId: string, taskId: string) => void): void {
@@ -339,6 +343,13 @@ $${task.maxBudgetUsd}
       this.onWorkerSpawned(session.id, taskId);
     }
 
+    // Record worker_spawned metric
+    this.metrics?.record('worker_spawned', {
+      taskId,
+      model: task.model,
+      maxBudgetUsd: task.maxBudgetUsd,
+    });
+
     this.heartbeat.notifyTaskChange();
     this.logger.info({ taskId, agentId: session.id, model: task.model }, 'Worker spawned');
     return this.ok(`Worker ${session.id} spawned for task ${taskId} (${task.model})`);
@@ -361,7 +372,29 @@ $${task.maxBudgetUsd}
     const session = this.adapter.getSession(agentId);
     if (!session) return this.error(`Worker not found: ${agentId}`);
 
+    // Capture info before kill
+    const info = this.adapter.getSessionInfo(agentId);
+
     await this.adapter.killSession(agentId);
+
+    // Record metrics
+    this.metrics?.record('worker_killed', {
+      taskId: session.taskId || 'unknown',
+      agentId,
+      reason: 'ceo',
+    });
+    if (info) {
+      this.metrics?.record('worker_completed', {
+        taskId: session.taskId || 'unknown',
+        agentId,
+        model: session.config.model,
+        durationMinutes: Math.round(info.runtime / 60000),
+        tokensInput: info.tokensInput,
+        tokensOutput: info.tokensOutput,
+        costUsd: info.costUsd,
+        success: false,
+      });
+    }
 
     // Mark task as failed
     if (session.taskId) {
