@@ -637,6 +637,25 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
       }
     }
 
+    // CEO crash recovery — if no CEO session exists and we're not mid-restart, restart it
+    if (!ceoRestartPending && !adapter.getCeoSession()) {
+      ceoRestartPending = true;
+      logger.warn('CEO session not found — auto-restarting');
+      metrics.record('ceo_restart', {
+        reason: 'crash',
+        sessionDurationMinutes: 0,
+        totalTokens: 0,
+        totalCostUsd: 0,
+      });
+      broadcast({
+        type: 'safety_alert',
+        data: { action: 'ceo_restarted', reason: 'crash' },
+        timestamp: new Date().toISOString(),
+      });
+      await startCeo();
+      ceoRestartPending = false;
+    }
+
     // CEO session age check (guarded against double restart)
     const ceo = adapter.getCeoSession();
     if (!ceoRestartPending && ceo && safety.shouldRestartCeo(new Date(ceo.info.startedAt).getTime())) {
