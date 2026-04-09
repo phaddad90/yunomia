@@ -1,69 +1,46 @@
 # Eunomia
 
-> *Greek goddess of good order and lawful conduct.*
+```
+ ███████╗██╗   ██╗███╗   ██╗ ██████╗ ███╗   ███╗██╗ █████╗
+ ██╔════╝██║   ██║████╗  ██║██╔═══██╗████╗ ████║██║██╔══██╗
+ █████╗  ██║   ██║██╔██╗ ██║██║   ██║██╔████╔██║██║███████║
+ ██╔══╝  ██║   ██║██║╚██╗██║██║   ██║██║╚██╔╝██║██║██╔══██║
+ ███████╗╚██████╔╝██║ ╚████║╚██████╔╝██║ ╚═╝ ██║██║██║  ██║
+ ╚══════╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝ ╚═╝     ╚═╝╚═╝╚═╝  ╚═╝
+```
 
-A browser-based command centre for orchestrating Claude Code agent sessions. One persistent CEO agent plans and delegates work. Temporary worker agents are spawned for specific tasks and killed on completion. A shared `TASKS.md` file is the coordination layer. A dashboard gives the human full visibility, cost tracking, and intervention controls.
+> *One brain. Many hands. No waste.*
+
+A lean, browser-based command centre that runs a team of Claude Code agents from your terminal. One CEO thinks. Temporary workers execute. Everything streams live to `localhost:4600`. You stay in control.
+
+Built because existing multi-agent tools burn 10x the tokens for the same output. Eunomia was designed from the ground up around token efficiency — three rounds of adversarial red-team review, 15 critics, stress-tested to a risk score of 15/125 before a single line of code was written.
 
 ![Dashboard](docs/screenshot.png)
 
-## Why This Exists
+---
 
-Multi-agent orchestration tools like Paperclip AI suffer from runaway token consumption -- 10M+ tokens/day for work a single agent could do in 1M. The root causes are well-documented: session history accumulation via `--resume`, oversized skill files loaded every heartbeat, and hundreds of MCP tool definitions inflating every turn.
+## The idea
 
-Eunomia takes the opposite approach: a persistent CEO with a compact context (SOUL.md + GOALS.md + MEMORY.md), temporary workers with clean per-task sessions, and exactly 7 MCP tools instead of 240. The result is 4-6x a single agent's throughput at $40-100/day with mixed models, not $300/day per agent.
+Most orchestrators treat AI agents like stateless contractors — full re-briefing every interaction, hundreds of tool definitions inflating every turn, session history ballooning across heartbeats. The result: your usage limits evaporate in minutes.
 
-See [docs/RESEARCH.md](docs/RESEARCH.md) for the full token efficiency analysis and Paperclip comparison.
+Eunomia flips it. Agents are employees, not contractors:
 
-## How It Works
+- **CEO persists.** One long-running session with auto-compaction. Context lives in files (SOUL.md, GOALS.md, MEMORY.md), not in bloated conversation history.
+- **Workers are disposable.** Spawned for one task, scoped to one directory, killed on completion. Clean context every time.
+- **7 tools, not 240.** The CEO gets exactly what it needs. ~1,200 tokens of tool overhead per turn.
+- **TASKS.md is the board.** No database, no kanban UI, no drag-and-drop. A markdown file both human and AI read natively. Git-trackable for free.
+- **Safety is not optional.** 13 guardrails ship in V1. Workers can't use Bash. Workers can't write outside their folder. Budget caps, timeouts, inactivity pause — all enforced at the SDK level, not by polite instructions.
 
-```
-Browser (localhost:4600)
-    |
-    | WebSocket + REST
-    v
-Eunomia Server (Node.js, single process)
-    |
-    |-- agent-adapter.ts ---- SDK abstraction layer (swappable)
-    |   |-- CEO Session       (persistent, auto-compacting)
-    |   |-- Worker Sessions   (temporary, task-scoped)
-    |
-    |-- tasks.ts ------------ TASKS.md read/write + in-memory cache
-    |-- mcp-server.ts ------- 7 MCP tools for CEO
-    |-- ws-relay.ts ---------- WebSocket per terminal (xterm.js)
-    |-- heartbeat.ts --------- Adaptive interval scheduler
-    |-- safety.ts ------------ 13 guardrails (see below)
-    |-- metrics.ts ----------- Usage analytics + daily reports
-    |-- logger.ts ------------ Structured logging (pino, daily rotation)
-    |
-    v
-Project Folder
-    |-- PROJECT.md         Mission and goals (auto-generated, human-editable)
-    |-- TASKS.md           Shared task list (CEO writes, human edits)
-    |-- ceo/
-    |   |-- SOUL.md        CEO personality and rules
-    |   |-- GOALS.md       Current objectives
-    |   |-- MEMORY.md      CEO's working memory (50-line cap, auto-rotated)
-    |-- workers/
-        |-- task-042/
-            |-- SOUL.md    Read-only context from template
-            |-- output/    Work product
-```
+---
 
-**CEO agent** reads its SOUL.md, GOALS.md, and MEMORY.md on startup. It plans work, creates tasks in TASKS.md, and spawns workers via MCP tools. An adaptive heartbeat prompts the CEO at configurable intervals (default 10 minutes), skipping beats when nothing has changed and doubling the interval after consecutive no-ops.
+## Get running
 
-**Worker agents** are spawned for a single task, scoped to their own directory, with no Bash access and write-isolation enforced by the SDK. When the work is done, the worker reports back and is killed. Output is reviewed by the CEO.
-
-**TASKS.md** is the single source of truth. Both the CEO and the human can read and edit it directly. No kanban board, no database -- just a markdown file with inline metadata for model, priority, and budget. Git-trackable for free.
-
-## Installation
-
-### Prerequisites
+### You need
 
 - Node.js 22+
-- npm
-- Claude Code CLI installed and authenticated (`claude --version` should work)
+- Claude Code CLI, authenticated (`claude --version`)
 
-### Setup
+### Install
 
 ```bash
 git clone https://github.com/phaddad90/eunomia.git
@@ -71,30 +48,79 @@ cd eunomia/app
 npm install
 ```
 
-No build step required for development.
-
-## Quick Start
+### Start
 
 ```bash
-cd app
 npm run dev -- --project /path/to/your/code
 ```
 
-Open [http://localhost:4600](http://localhost:4600).
+Open **http://localhost:4600**. That's it.
 
-The server will:
+Eunomia scans your project, auto-generates context files, launches the CEO, and opens the dashboard. You'll see the CEO terminal streaming live within seconds.
 
-1. Scan your project directory for README, package.json, and existing docs
-2. Auto-generate `PROJECT.md` with discovered context
-3. Create `ceo/` folder with default SOUL.md and GOALS.md
-4. Create an empty `TASKS.md`
-5. Launch the dashboard and start the CEO agent
+```
+Options:
+  --project <path>    Target project directory (required)
+  --port <number>     Dashboard port (default: 4600)
+  --model <name>      CEO model (default: claude-sonnet-4-6)
+```
 
-A banner will remind you: *"Using default configuration. Edit PROJECT.md, ceo/SOUL.md, or ceo/GOALS.md to improve results."*
+---
+
+## How it works
+
+```
+localhost:4600 (browser)
+       |
+       | WebSocket + REST
+       v
+Eunomia Server ─────────────────────────────────
+  |
+  |── agent-adapter    SDK wrapper (spawn / kill / stream)
+  |     |── CEO        persistent session, auto-compacting
+  |     |── Workers    temporary, task-scoped, disposable
+  |
+  |── tasks            TASKS.md parser + in-memory cache
+  |── mcp-server       7 tools exposed to CEO only
+  |── heartbeat        adaptive interval (10m default, backs off)
+  |── safety           13 guardrails, SDK-enforced
+  |── metrics          usage analytics, daily reports
+  |── logger           structured logs (pino, daily rotation)
+  |
+  v
+Your Project ───────────────────────────────────
+  |── PROJECT.md       mission + goals (auto-generated)
+  |── TASKS.md         the board (CEO writes, human edits)
+  |── ceo/
+  |     |── SOUL.md    who the CEO is
+  |     |── GOALS.md   what it's targeting
+  |     |── MEMORY.md  what it remembers (50-line cap, rotated)
+  |── workers/
+        |── task-042/
+              |── output/   work product
+```
+
+**The loop:** CEO reads its soul and goals. Checks the task board. Breaks work into tasks. Spawns a worker. Worker completes (or fails). CEO reviews. Repeat. You watch, intervene when needed, or walk away — the inactivity pause will stop spending after 60 minutes of silence.
+
+---
+
+## The dashboard
+
+Three tabs. Always-visible status bar. Always-visible prompt input.
+
+**Terminals** — Full-width xterm.js CEO terminal. Worker terminals as expandable pills below. Click to swap view, Back button to return.
+
+**Tasks** — Live-rendered TASKS.md. Planned / Active / Done / Failed sections. Add tasks, retry failed ones, kill active workers — all inline.
+
+**Status** — Per-agent cost breakdown, heartbeat info, safety guard status, today's metrics (tasks completed, success rate, spend, heartbeat skip rate).
+
+**Status bar** — CEO state, worker count, today's spend. Goes amber at 80% budget, red at 100%.
+
+---
 
 ## Configuration
 
-Create `eunomia.config.json` in your project directory (optional -- all fields have sensible defaults):
+Drop an `eunomia.config.json` in your project directory. Everything is optional — defaults are sane.
 
 ```json
 {
@@ -119,135 +145,131 @@ Create `eunomia.config.json` in your project directory (optional -- all fields h
 }
 ```
 
-## CLI Options
+---
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--project <path>` | Target project directory (required) | -- |
-| `--port <number>` | Dashboard port | `4600` |
-| `--model <name>` | CEO model | `claude-sonnet-4-6` |
+## Safety
 
-```bash
-npm run dev -- --project /projects/apprintable --port 4600 --model claude-opus-4-6
+Thirteen guardrails. All ship in V1. Not negotiable.
+
+| Guard | What happens | Default |
+|-------|-------------|---------|
+| Concurrency cap | Rejects spawn if at limit | 3 workers |
+| Daily budget | Warns at 80%, hard stops at 100% | $50/day |
+| Worker timeout | Kills worker, marks task failed | 30 min |
+| Retry limit | Marks task failed, needs human | 2 retries |
+| Inactivity pause | Pauses heartbeat when you're away | 60 min |
+| Working hours | Pauses outside hours, auto-resumes | Off |
+| Write isolation | Blocks Write/Edit outside worker dir | Always on |
+| Bash blocked | Workers cannot use Bash. Period. | Always on |
+| CEO session age | Saves memory, restarts fresh | 8 hours |
+| CEO crash recovery | Auto-restarts, notifies dashboard | Always on |
+| Spawn approval | Optional human approve/reject gate | Off |
+| Orphan cleanup | Marks stale tasks failed on restart | Always on |
+| Human kill | Dashboard kill button, preserves output | Always on |
+
+Workers are sandboxed at the SDK level. `disallowedTools: ['Bash']` plus a `canUseTool` path guard on every Write/Edit. This isn't a suggestion in a prompt — it's a hard block in the runtime.
+
+---
+
+## Tuning your agents
+
+Edit these in your project's `ceo/` folder:
+
+**SOUL.md** — Who the CEO is. Personality, rules, decision-making style. Keep under 50 lines. Human-written context outperforms AI-generated by ~7% in controlled studies. Worth your time.
+
+**GOALS.md** — KPIs and sprint targets. Update as your project evolves. The CEO reads this every session.
+
+**PROJECT.md** — Auto-generated on first run from your README and package.json. Edit it to add what the scanner missed. This is the mission brief every agent sees.
+
+Templates in `templates/` if you want a starting point.
+
+---
+
+## Metrics + analytics
+
+Every event is tracked to `metrics.jsonl`:
+
+- Heartbeat fired/skipped (with interval and token counts)
+- Worker spawned/completed/killed (with model, duration, cost, success)
+- Human interactions (prompts, pauses, kills, task edits)
+- Cost milestones (25%, 50%, 80%, 100% of budget)
+- CEO restarts (age limit, crash)
+
+Daily reports auto-generate to `reports/YYYY-MM-DD.md` on shutdown.
+
+```
+GET /api/metrics/summary    JSON summary of today's session
+GET /api/metrics/report     Markdown daily report
 ```
 
-## Project Structure
+---
 
-### What gets created in your project folder
+## Cost reality
 
-```
-your-project/
-  PROJECT.md                Auto-generated project summary
-  TASKS.md                  Shared task list
-  eunomia.config.json       Safety and behaviour config (optional)
-  audit.jsonl               Append-only task mutation log
-  metrics.jsonl             Usage analytics (token costs, worker lifecycle)
-  ceo/
-    SOUL.md                 CEO personality (editable)
-    GOALS.md                Current objectives (editable)
-    MEMORY.md               CEO's working memory (auto-managed)
-    MEMORY-archive.md       Older memory entries (auto-rotated)
-  workers/
-    task-042/               Created per task
-      SOUL.md
-      output/
-  logs/
-    eunomia-2026-04-09.log  Daily structured logs
-  reports/
-    2026-04-09.md           Daily usage reports (auto-generated)
-```
+No hand-waving. These are stress-tested estimates.
 
-## Safety Guardrails
+| Setup | Daily cost |
+|-------|-----------|
+| Opus CEO + Sonnet workers | $60 - $120 |
+| Sonnet CEO + Sonnet workers | $30 - $70 |
+| Sonnet CEO + Haiku workers | $20 - $50 |
 
-Safety ships in V1. It is not optional.
+For comparison: a single Claude Code session runs $5-15/day. Eunomia runs 4-6x that for multi-agent throughput. The alternative tools run 10x+.
 
-| Guard | Trigger | Action | Default |
-|-------|---------|--------|---------|
-| Concurrency cap | `spawn_worker` called | Reject if at limit | 3 workers |
-| Daily budget | Any token spend | Warn 80%, pause 100% | $50/day |
-| Worker timeout | Worker exceeds runtime | Kill, mark failed | 30 min |
-| Retry limit | Task retried N times | Mark failed, need human | 2 retries |
-| Inactivity pause | No human interaction | Pause heartbeat | 60 min |
-| Working hours | Outside configured hours | Pause all, auto-resume | Off |
-| Worker write scope | Write/Edit outside worker dir | Block via SDK | Always on |
-| Worker Bash blocked | Any Bash tool use | Block via `disallowedTools` | Always on |
-| CEO session age | Session exceeds max hours | Save memory, restart | 8 hours |
-| CEO crash recovery | Session dies unexpectedly | Auto-restart, notify | Always on |
-| Spawn approval | `requireApprovalForSpawn` on | Dashboard approve/reject | Off |
-| Orphan cleanup | Server restart | Mark active tasks failed | Always on |
-| Human kill | Dashboard kill button | Kill process, mark failed | Always on |
+---
 
-Worker isolation is the most critical guardrail. Workers cannot use Bash and cannot write outside their own directory, enforced at the SDK level.
+## Tech
 
-## Customisation
+5 runtime deps. 0 client deps. No React. No database. No build step for the dashboard.
 
-Edit these files in your project's `ceo/` directory:
-
-- **SOUL.md** -- CEO personality, communication style, decision-making rules. Keep under 50 lines.
-- **GOALS.md** -- Current objectives and KPIs. Update as your project evolves.
-- **PROJECT.md** -- Auto-generated on first run. Edit to add context the scanner missed.
-
-Research shows human-written context files improve agent success by ~4%. AI-generated context hurts by ~3%. Invest time here.
-
-Templates are in the `templates/` directory for reference.
-
-## Dashboard
-
-Three tabs, always-visible status bar, always-visible prompt input.
-
-**Terminals** (default) -- Full-width CEO terminal. Worker terminals appear as clickable pills below. Click to expand (replaces CEO view with Back button).
-
-**Tasks** -- Rendered TASKS.md with planned/active/done/failed sections. Add Task button for human-created tasks. Inline edit controls.
-
-**Status** -- Per-agent breakdown (model, session age, tokens, cost). Cost split. Safety guard status. Heartbeat info.
-
-**Status bar** (always visible) -- CEO state, worker count, today's spend. Green/amber/red based on budget usage.
-
-## Cost Estimates
-
-| Scenario | CEO Model | Worker Model | Daily Cost |
-|----------|-----------|--------------|------------|
-| Full Opus CEO | Opus | Sonnet | $60 - $120 |
-| Mixed CEO | Sonnet + Opus | Sonnet | $30 - $70 |
-| Budget mode | Sonnet | Sonnet + Haiku | $20 - $50 |
-
-| System | Tokens/Day | Cost/Day |
-|--------|-----------|----------|
-| Single Claude Code | 500K - 1M | $5 - $15 |
-| Eunomia (mixed) | 4M - 8M | $40 - $100 |
-| Paperclip AI | 10M+ | $300+/agent |
-
-## MCP Tools (CEO only)
-
-| Tool | Purpose |
-|------|---------|
-| `tasks_list` | Read TASKS.md filtered by status |
-| `tasks_create` | Add a task to Planned |
-| `tasks_update` | Update status, notes, or priority |
-| `spawn_worker` | Create a temporary worker for a task |
-| `worker_status` | Check worker runtime and spend |
-| `kill_worker` | Force-stop a worker |
-| `list_workers` | List all active workers |
-
-Total tool definition overhead: ~1,200 tokens per turn.
-
-## Tech Stack
-
-| Component | Choice |
-|-----------|--------|
-| Agent runtime | `@anthropic-ai/claude-agent-sdk` (fallback: CLI via `node-pty`) |
+| | |
+|---|---|
+| Agent runtime | `@anthropic-ai/claude-agent-sdk` |
 | Server | Express 5 + ws |
-| Terminal UI | xterm.js (CDN) |
-| Logging | pino (daily rotation) |
-| Styling | Vanilla CSS, dark theme |
-| Build | tsup (dev: tsx) |
+| Terminals | xterm.js via CDN |
+| Logs | pino |
+| CSS | Vanilla, dark theme |
+| Build | tsx (dev), tsup (prod) |
 
-Runtime dependencies: 5. Client dependencies: 0.
+---
+
+## Roadmap
+
+**v1.1 — Sharper CEO**
+- Model routing per-heartbeat (Sonnet for routine checks, Opus for strategic planning)
+- Configurable cold-start prompt templates
+- Worker output summarisation (CEO writes 200-word digest, raw output archived)
+
+**v1.2 — Better visibility**
+- Historical cost graph on Status tab (last 7 days)
+- Worker success rate trend line
+- Sound/browser notifications on worker completion and safety alerts
+- Command palette in prompt input (`/pause`, `/status`, `/spawn`)
+
+**v1.3 — Smarter workers**
+- Sandboxed Bash for workers (restricted to output dir only)
+- Worker-to-worker file handoff (output of task A becomes input for task B)
+- Task dependency chains (task B blocked until task A completes)
+- Git auto-commit on worker completion
+
+**v2.0 — Multi-project**
+- Project switching in dashboard
+- Cross-project CEO memory
+- Shared worker pool
+- Team mode (multiple humans, role-based access)
+
+**Future**
+- Goal hierarchy (goals break into tasks, progress bars roll up)
+- Confirmation mode (CEO proposes, human approves before execution)
+- Plugin system for custom MCP tools
+- Remote deployment (run Eunomia on a server, access from anywhere)
+
+---
 
 ## License
 
 MIT
 
-## Credits
+---
 
-Built by Peter Haddad. Designed with Claude Opus 4.6. Three rounds of red team review (15 critics total). Validated through adversarial stress-testing across token economics, architecture, UX, chaos engineering, and strategic viability.
+Built by [Peter Haddad](https://github.com/phaddad90). Designed with Claude Opus 4.6 through three rounds of red-team review — because if you're going to let AI manage AI, you'd better stress-test it first.
