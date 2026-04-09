@@ -308,10 +308,8 @@ $${task.maxBudgetUsd}
       haiku: 'claude-haiku-4-5-20251001',
     };
 
-    // Get output callback for worker terminal streaming
-    const outputCb = this.onWorkerOutput ? this.onWorkerOutput(taskId) : undefined;
-
     // Spawn the worker FIRST — only mark active if spawn succeeds
+    // Output callback is wired AFTER spawn so we have the real session.id
     let session;
     try {
       session = await this.adapter.spawnSession(
@@ -325,12 +323,18 @@ $${task.maxBudgetUsd}
           maxBudgetUsd: task.maxBudgetUsd,
           persistSession: false,
         },
-        outputCb,
+        undefined, // output wired post-spawn below
         taskId,
       );
     } catch (err) {
       this.logger.error({ taskId, err }, 'Failed to spawn worker');
       return this.error(`Failed to spawn worker for task ${taskId}: ${err}`);
+    }
+
+    // Wire output streaming using the real session.id (not taskId)
+    if (this.onWorkerOutput) {
+      const outputCb = this.onWorkerOutput(session.id);
+      this.adapter.setOutputCallback(session.id, outputCb);
     }
 
     // Spawn succeeded — now mark task active

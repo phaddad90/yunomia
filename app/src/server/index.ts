@@ -49,8 +49,20 @@ function parseArgs(): EunomiaConfig {
       const fileConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
       if (fileConfig.port) config.port = fileConfig.port;
       if (fileConfig.ceoModel) config.ceoModel = fileConfig.ceoModel;
-      if (fileConfig.safety) {
-        config.safety = { ...DEFAULT_SAFETY_CONFIG, ...fileConfig.safety };
+      if (fileConfig.safety && typeof fileConfig.safety === 'object') {
+        // Validate each field against the same bounds used by the PATCH endpoint
+        const s = fileConfig.safety as Record<string, unknown>;
+        const valid = { ...DEFAULT_SAFETY_CONFIG };
+        if (typeof s.maxConcurrentWorkers === 'number' && s.maxConcurrentWorkers >= 1 && s.maxConcurrentWorkers <= 10) valid.maxConcurrentWorkers = s.maxConcurrentWorkers;
+        if (typeof s.maxDailyBudgetUsd === 'number' && s.maxDailyBudgetUsd >= 1 && s.maxDailyBudgetUsd <= 500) valid.maxDailyBudgetUsd = s.maxDailyBudgetUsd;
+        if (typeof s.maxWorkerRuntimeMinutes === 'number' && s.maxWorkerRuntimeMinutes >= 1 && s.maxWorkerRuntimeMinutes <= 120) valid.maxWorkerRuntimeMinutes = s.maxWorkerRuntimeMinutes;
+        if (typeof s.maxRetries === 'number' && s.maxRetries >= 0 && s.maxRetries <= 10) valid.maxRetries = s.maxRetries;
+        if (typeof s.inactivityPauseMinutes === 'number' && s.inactivityPauseMinutes >= 5 && s.inactivityPauseMinutes <= 480) valid.inactivityPauseMinutes = s.inactivityPauseMinutes;
+        if (typeof s.heartbeatIntervalMinutes === 'number' && s.heartbeatIntervalMinutes >= 1 && s.heartbeatIntervalMinutes <= 60) valid.heartbeatIntervalMinutes = s.heartbeatIntervalMinutes;
+        if (typeof s.maxCeoSessionHours === 'number' && s.maxCeoSessionHours >= 1 && s.maxCeoSessionHours <= 24) valid.maxCeoSessionHours = s.maxCeoSessionHours;
+        if (typeof s.maxPlannedTasks === 'number' && s.maxPlannedTasks >= 5 && s.maxPlannedTasks <= 100) valid.maxPlannedTasks = s.maxPlannedTasks;
+        if (typeof s.requireApprovalForSpawn === 'boolean') valid.requireApprovalForSpawn = s.requireApprovalForSpawn;
+        config.safety = valid;
       }
     } catch {
       // Ignore bad config
@@ -550,12 +562,19 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
     };
   }
 
-  // ─── Cost Tracking ───
+  // ─── Cost Tracking (delta-based to avoid double-counting cumulative totals) ───
+
+  const lastKnownCost = new Map<string, number>();
 
   adapter.setOnCostUpdate((agentId, costUsd, tokensInput, tokensOutput) => {
-    safety.recordSpend(costUsd);
-    metrics.checkCostMilestone(safety.getDailySpend(), config.safety.maxDailyBudgetUsd);
-    logger.info({ agentId, costUsd: costUsd.toFixed(4), tokensInput, tokensOutput }, 'Cost update');
+    const previous = lastKnownCost.get(agentId) || 0;
+    const delta = Math.max(0, costUsd - previous);
+    lastKnownCost.set(agentId, costUsd);
+    if (delta > 0) {
+      safety.recordSpend(delta);
+      metrics.checkCostMilestone(safety.getDailySpend(), config.safety.maxDailyBudgetUsd);
+    }
+    logger.info({ agentId, costUsd: costUsd.toFixed(4), delta: delta.toFixed(4), tokensInput, tokensOutput }, 'Cost update');
   });
 
   // ─── Worker lifecycle ───
@@ -589,6 +608,10 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
 
   // Worker timeout checker + system health loop
   let ceoRestartPending = false;
+  let ceoCrashCount = 0;
+  let lastCeoCrashTime = 0;
+  const MAX_CEO_CRASHES = 3;
+  const CEO_CRASH_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
   setInterval(async () => {
     // Worker timeouts
@@ -637,23 +660,42 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
       }
     }
 
-    // CEO crash recovery — if no CEO session exists and we're not mid-restart, restart it
+    // CEO crash recovery with backoff — if no CEO session exists, restart it
     if (!ceoRestartPending && !adapter.getCeoSession()) {
-      ceoRestartPending = true;
-      logger.warn('CEO session not found — auto-restarting');
-      metrics.record('ceo_restart', {
-        reason: 'crash',
-        sessionDurationMinutes: 0,
-        totalTokens: 0,
-        totalCostUsd: 0,
-      });
-      broadcast({
-        type: 'safety_alert',
-        data: { action: 'ceo_restarted', reason: 'crash' },
-        timestamp: new Date().toISOString(),
-      });
-      await startCeo();
-      ceoRestartPending = false;
+      // Check crash frequency — stop retrying after MAX_CEO_CRASHES within the window
+      const now = Date.now();
+      if (now - lastCeoCrashTime > CEO_CRASH_WINDOW_MS) {
+        ceoCrashCount = 0; // reset counter if outside window
+      }
+      ceoCrashCount++;
+      lastCeoCrashTime = now;
+
+      if (ceoCrashCount > MAX_CEO_CRASHES) {
+        logger.error({ crashes: ceoCrashCount }, 'CEO crash limit reached — pausing system');
+        safety.pause('CEO crash loop detected');
+        heartbeat.pause();
+        broadcast({
+          type: 'safety_alert',
+          data: { action: 'paused', reason: `CEO crashed ${ceoCrashCount} times in ${CEO_CRASH_WINDOW_MS / 60000}m — manual restart needed` },
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        ceoRestartPending = true;
+        logger.warn({ crashCount: ceoCrashCount }, 'CEO session not found — auto-restarting');
+        metrics.record('ceo_restart', {
+          reason: 'crash',
+          sessionDurationMinutes: 0,
+          totalTokens: 0,
+          totalCostUsd: 0,
+        });
+        broadcast({
+          type: 'safety_alert',
+          data: { action: 'ceo_restarted', reason: 'crash' },
+          timestamp: new Date().toISOString(),
+        });
+        await startCeo();
+        ceoRestartPending = false;
+      }
     }
 
     // CEO session age check (guarded against double restart)

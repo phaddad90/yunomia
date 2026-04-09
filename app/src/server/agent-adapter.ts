@@ -380,6 +380,12 @@ export class AgentAdapter {
     this.logger.info({ agentId }, 'Agent killed');
   }
 
+  // ─── Output ───
+
+  setOutputCallback(agentId: string, cb: (data: string) => void): void {
+    this.outputCallbacks.set(agentId, cb);
+  }
+
   // ─── Info ───
 
   getSession(agentId: string): AgentSession | undefined {

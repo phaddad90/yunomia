@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, watchFile, unwatchFile, appendFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, watchFile, unwatchFile, appendFileSync, mkdirSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import type { Task, TaskStatus, TaskPriority, ModelChoice, AuditEntry, TasksState } from './types.js';
 import type { Logger } from 'pino';
@@ -318,6 +318,14 @@ export class TaskManager {
   private audit(actor: 'ceo' | 'human' | 'system', action: string, taskId: string | undefined, detail: string): void {
     const entry: AuditEntry = { timestamp: new Date().toISOString(), actor, action, taskId, detail };
     try {
+      // Rotate if over 1MB
+      if (existsSync(this.auditPath)) {
+        const stat = statSync(this.auditPath);
+        if (stat.size > 1024 * 1024) {
+          const bakPath = this.auditPath.replace('.jsonl', `-${new Date().toISOString().split('T')[0]}.jsonl.bak`);
+          renameSync(this.auditPath, bakPath);
+        }
+      }
       appendFileSync(this.auditPath, JSON.stringify(entry) + '\n');
     } catch { /* non-fatal */ }
   }
