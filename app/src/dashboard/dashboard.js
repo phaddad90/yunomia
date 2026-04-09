@@ -83,7 +83,7 @@ function initTerminals() {
     },
     fontFamily: "'SF Mono', 'Cascadia Code', 'JetBrains Mono', monospace",
     fontSize: 13,
-    lineHeight: 1.4,
+    lineHeight: 1.2,
     scrollback: 1000,
     cursorBlink: true,
   });
@@ -141,7 +141,7 @@ function createWorkerTerminal(agentId) {
     },
     fontFamily: "'SF Mono', 'Cascadia Code', 'JetBrains Mono', monospace",
     fontSize: 13,
-    lineHeight: 1.4,
+    lineHeight: 1.2,
     scrollback: 1000,
   });
 
