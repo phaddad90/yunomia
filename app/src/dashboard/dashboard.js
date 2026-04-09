@@ -353,6 +353,12 @@ async function refreshStatus() {
 
     updateStatusBar(health, heartbeat);
     updateCostBadge(health.budget);
+
+    // Fetch and render metrics
+    try {
+      const metricsSummary = await fetch('/api/metrics/summary').then(r => r.json());
+      renderMetrics(metricsSummary);
+    } catch { /* metrics endpoint may not be ready */ }
   } catch (e) {
     statusFailCount++;
     if (statusFailCount >= 3) {
@@ -366,6 +372,29 @@ function statusRow(label, value, colorClass) {
     <span class="status-label">${escapeHtml(String(label))}</span>
     <span class="status-value ${colorClass || ''}">${escapeHtml(String(value))}</span>
   </div>`;
+}
+
+// ─── Metrics Card ───
+
+function renderMetrics(summary) {
+  const el = document.getElementById('metrics-status-rows');
+  if (!el || !summary) return;
+
+  const successColor = summary.workerSuccessRate >= 80 ? 'green' : summary.workerSuccessRate >= 50 ? 'amber' : 'red';
+  const skipColor = summary.heartbeatSkipRate <= 20 ? 'green' : summary.heartbeatSkipRate <= 50 ? 'amber' : 'red';
+
+  el.innerHTML = `
+    ${statusRow('Total Cost', '$' + (summary.totalCostUsd || 0).toFixed(2))}
+    ${statusRow('Session Duration', (summary.sessionDurationMinutes || 0) + 'm')}
+    ${statusRow('Tasks Completed', String(summary.tasksCompleted || 0), 'green')}
+    ${statusRow('Tasks Failed', String(summary.tasksFailed || 0), summary.tasksFailed > 0 ? 'red' : '')}
+    ${statusRow('Workers Spawned', String(summary.workersSpawned || 0))}
+    ${statusRow('Success Rate', (summary.workerSuccessRate || 0) + '%', successColor)}
+    ${statusRow('Heartbeats', String(summary.heartbeatCount || 0))}
+    ${statusRow('HB Skip Rate', (summary.heartbeatSkipRate || 0) + '%', skipColor)}
+    ${statusRow('Human Actions', String(summary.humanInteractions || 0))}
+    ${statusRow('CEO Restarts', String(summary.ceoRestarts || 0))}
+  `;
 }
 
 // ─── Status Bar ───
