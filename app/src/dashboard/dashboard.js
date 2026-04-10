@@ -632,7 +632,7 @@ async function sendPrompt() {
   if (ceoTerminal) {
     const ts = timeStamp();
     const lines = text.split('\n').map(l => l.replace(/\r/g, ''));
-    ceoTerminal.write(`\r\n\r\n\x1b[1;36m> You:\x1b[0m ${lines[0]}\r\n`);
+    ceoTerminal.write(`\r\n\x1b[1;36m> You:\x1b[0m ${lines[0]}\r\n`);
     for (let i = 1; i < lines.length; i++) {
       ceoTerminal.write(`\x1b[1;36m  |\x1b[0m ${lines[i]}\r\n`);
     }
