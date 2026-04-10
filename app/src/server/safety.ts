@@ -142,18 +142,36 @@ export class SafetyModule {
 
   // CEO guard: prevent modification of its own SOUL.md and GOALS.md
   createCeoToolGuard(ceoDir: string): (tool: string, input: Record<string, unknown>, options?: unknown) => Promise<{ behavior: string }> {
+    const projectRoot = resolve(join(ceoDir, '..'));
     const protectedFiles = [
       resolve(join(ceoDir, 'SOUL.md')),
       resolve(join(ceoDir, 'GOALS.md')),
+      resolve(join(projectRoot, 'PROJECT.md')),
+      resolve(join(projectRoot, 'TASKS.md')),
     ];
 
     return async (tool: string, input: Record<string, unknown>) => {
       const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
       if (WRITE_TOOLS.has(tool)) {
         const targetPath = input.file_path as string;
-        if (targetPath && protectedFiles.includes(resolve(targetPath))) {
+        if (!targetPath) return { behavior: 'allow' };
+
+        const resolvedTarget = resolve(targetPath);
+
+        // Block protected files
+        if (protectedFiles.includes(resolvedTarget)) {
           this.logger.warn({ tool, targetPath }, 'CEO write blocked — protected file');
           return { behavior: 'deny' };
+        }
+
+        // Size guard on MEMORY.md — block single writes over 100 lines / 4KB
+        const memoryFile = resolve(join(ceoDir, 'MEMORY.md'));
+        if (resolvedTarget === memoryFile) {
+          const content = (input.content as string) || (input.new_string as string) || '';
+          if (content.length > 4000 || content.split('\n').length > 100) {
+            this.logger.warn({ tool, bytes: content.length }, 'CEO MEMORY.md write blocked — too large');
+            return { behavior: 'deny' };
+          }
         }
       }
       return { behavior: 'allow' };

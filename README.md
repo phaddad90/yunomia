@@ -207,10 +207,14 @@ A single Claude Code session runs $5-15/day. Eunomia runs 4-6x that for multi-ag
 
 ---
 
+## Status
+
+**Current version: v1.0** — fully functional, 5 rounds of red-team review, actively in use.
+
 ## Roadmap
 
-**v1.1 — Sharper CEO**
-- Model routing per-heartbeat (Sonnet for routine, Opus for strategy)
+**v1.1 — Sharper CEO** *(next)*
+- Model routing per-heartbeat (Sonnet for routine checks, Opus for strategic planning)
 - Worker output summarisation (CEO writes digest, raw output archived)
 - Configurable cold-start prompt templates
 
@@ -233,10 +237,10 @@ A single Claude Code session runs $5-15/day. Eunomia runs 4-6x that for multi-ag
 
 **v3.0 — Team mode**
 - Multiple humans, role-based access
-- Goal hierarchy (goals break into tasks, progress bars roll up)
-- Confirmation mode (CEO proposes, human approves before execution)
+- Goal hierarchy with progress rollup
+- Confirmation mode (CEO proposes, human approves)
 - Plugin system for custom MCP tools
-- Remote deployment (run Eunomia on a server, access from anywhere)
+- Remote deployment
 
 ---
 

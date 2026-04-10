@@ -317,7 +317,14 @@ async function main() {
     if (tasks.getPlannedCount() >= safety.getConfig().maxPlannedTasks) {
       return res.status(429).json({ error: `Planned task limit reached (${safety.getConfig().maxPlannedTasks})` });
     }
-    const task = await tasks.createTask(req.body);
+    const body = req.body;
+    if (!body.title || typeof body.title !== 'string' || body.title.length > 200) {
+      return res.status(400).json({ error: 'Title required, max 200 characters' });
+    }
+    if (body.description && (typeof body.description !== 'string' || body.description.length > 1000)) {
+      return res.status(400).json({ error: 'Description max 1000 characters' });
+    }
+    const task = await tasks.createTask(body);
     heartbeat.notifyTaskChange();
     broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
     res.json(task);
@@ -438,7 +445,8 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
     safety.recordHumanInteraction();
     metrics.record('human_interaction', { action: 'prompt' });
     const { message } = req.body;
-    if (!message) return res.status(400).json({ error: 'Message required' });
+    if (!message || typeof message !== 'string') return res.status(400).json({ error: 'Message required' });
+    if (message.length > 8000) return res.status(400).json({ error: 'Prompt max 8000 characters' });
 
     const ceo = adapter.getCeoSession();
     if (!ceo) return res.status(503).json({ error: 'CEO not running' });
@@ -521,7 +529,7 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
     ws.on('message', (raw) => {
       try {
         const msg = JSON.parse(raw.toString());
-        if (msg.type === 'prompt' && msg.message) {
+        if (msg.type === 'prompt' && typeof msg.message === 'string' && msg.message.length <= 8000) {
           safety.recordHumanInteraction();
           const ceo = adapter.getCeoSession();
           if (ceo) {

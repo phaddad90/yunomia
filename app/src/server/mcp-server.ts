@@ -279,12 +279,16 @@ export class McpServer {
     const outputDir = join(workerDir, 'output');
     mkdirSync(outputDir, { recursive: true });
 
+    // Sanitize task content for SOUL.md (prevent heading injection / stuffing)
+    const sanitizedTitle = (task.title || '').slice(0, 200).replace(/[#\n]/g, ' ');
+    const sanitizedDesc = (task.description || '').slice(0, 500).replace(/[#]/g, '');
+
     // Write worker SOUL.md
-    const soulContent = `# SOUL — Worker for ${task.title}
+    const soulContent = `# SOUL — Worker for ${sanitizedTitle}
 
 ## Task
-${task.title}
-${task.description || ''}
+${sanitizedTitle}
+${sanitizedDesc}
 
 ## Rules
 - Write ALL output to the output/ directory in your working folder
