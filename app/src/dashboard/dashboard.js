@@ -329,6 +329,7 @@ async function refreshStatus() {
     statusFailCount = 0; // reset on success
 
     document.getElementById('ceo-status-rows').innerHTML = `
+      ${statusRow('Version', 'v' + (health.version || '?'))}
       ${statusRow('Status', health.ceo.status, health.ceo.status === 'running' ? 'green' : 'amber')}
       ${statusRow('Model', health.ceo.model)}
       ${statusRow('Session Age', health.ceo.sessionAge)}
@@ -366,6 +367,10 @@ async function refreshStatus() {
 
     updateStatusBar(health, heartbeat);
     updateCostBadge(health.budget);
+
+    // Version display
+    const versionEl = document.getElementById('app-version');
+    if (versionEl && health.version) versionEl.textContent = 'v' + health.version;
 
     // Fetch and render metrics
     try {

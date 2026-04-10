@@ -63,6 +63,12 @@ body {
   color: var(--text-secondary);
 }
 
+.header-version {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
 .header-right {
   display: flex;
   align-items: center;

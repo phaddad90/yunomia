@@ -275,6 +275,7 @@ async function main() {
     const counts = tasks.getStatusCounts();
 
     const health: HealthResponse = {
+      version: process.env.npm_package_version || '1.0.0',
       status: safety.isPaused() ? 'degraded' : 'ok',
       uptime: Math.floor(process.uptime()),
       ceo: {
