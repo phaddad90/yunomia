@@ -497,8 +497,13 @@ function handleSpawnApproval(data) {
 
 // ─── Controls ───
 
+let pendingImages = []; // { data: base64, mediaType: string, previewUrl: string }
+let speechRecognition = null;
+let isRecording = false;
+
 function initPromptInput() {
   const input = document.getElementById('prompt-input');
+  const wrapper = document.getElementById('prompt-wrapper');
 
   // Enter sends, Shift+Enter inserts newline
   input.addEventListener('keydown', (e) => {
@@ -508,39 +513,189 @@ function initPromptInput() {
     }
   });
 
-  // Auto-resize textarea as content grows
+  // Auto-resize
   input.addEventListener('input', () => {
     input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  });
+
+  // ─── Image Drag & Drop ───
+  wrapper.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    wrapper.classList.add('drag-over');
+  });
+
+  wrapper.addEventListener('dragleave', () => {
+    wrapper.classList.remove('drag-over');
+  });
+
+  wrapper.addEventListener('drop', (e) => {
+    e.preventDefault();
+    wrapper.classList.remove('drag-over');
+    handleFiles(e.dataTransfer.files);
+  });
+
+  // Paste images (Cmd+V)
+  input.addEventListener('paste', (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        handleFiles([item.getAsFile()]);
+        break;
+      }
+    }
+  });
+
+  // Keyboard shortcut: V for voice (when not focused on textarea)
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'v' && document.activeElement !== input && !e.metaKey && !e.ctrlKey) {
+      toggleVoice();
+    }
+  });
+}
+
+function handleFiles(files) {
+  if (!files) return;
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) continue;
+    if (pendingImages.length >= 5) break;
+    if (file.size > 5 * 1024 * 1024) continue; // 5MB max per image
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const base64 = e.target.result.split(',')[1];
+      const previewUrl = e.target.result;
+      pendingImages.push({ data: base64, mediaType: file.type, previewUrl });
+      renderImagePreviews();
+    };
+    reader.readAsDataURL(file);
+  }
+}
+
+function renderImagePreviews() {
+  const container = document.getElementById('image-previews');
+  container.innerHTML = '';
+  pendingImages.forEach((img, i) => {
+    const div = document.createElement('div');
+    div.className = 'image-preview';
+    div.innerHTML = `<img src="${img.previewUrl}" alt="attachment"><button class="remove-img" data-idx="${i}">x</button>`;
+    div.querySelector('.remove-img').addEventListener('click', () => {
+      pendingImages.splice(i, 1);
+      renderImagePreviews();
+    });
+    container.appendChild(div);
   });
 }
 
 async function sendPrompt() {
   const input = document.getElementById('prompt-input');
   const message = input.value.trim();
-  if (!message) return;
+  if (!message && pendingImages.length === 0) return;
 
   if (Date.now() - lastPromptTime < PROMPT_COOLDOWN) return;
   lastPromptTime = Date.now();
 
-  // Echo the prompt in the CEO terminal so it feels like a conversation
+  const text = message || '(see attached images)';
+
+  // Echo in terminal
   if (ceoTerminal) {
-    const lines = message.split('\n').map(l => l.replace(/\r/g, ''));
+    const lines = text.split('\n').map(l => l.replace(/\r/g, ''));
     ceoTerminal.write(`\r\n\x1b[1;36m> You:\x1b[0m ${lines[0]}\r\n`);
     for (let i = 1; i < lines.length; i++) {
       ceoTerminal.write(`\x1b[1;36m  |\x1b[0m ${lines[i]}\r\n`);
     }
+    if (pendingImages.length > 0) {
+      ceoTerminal.write(`\x1b[1;36m  |\x1b[0m \x1b[90m[${pendingImages.length} image${pendingImages.length > 1 ? 's' : ''} attached]\x1b[0m\r\n`);
+    }
     ceoTerminal.write('\r\n');
+  }
+
+  const body = { message: text };
+  if (pendingImages.length > 0) {
+    body.images = pendingImages.map(img => ({ data: img.data, mediaType: img.mediaType }));
   }
 
   input.value = '';
   input.style.height = 'auto';
+  pendingImages = [];
+  renderImagePreviews();
 
   await fetch('/api/prompt', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify(body),
   });
+}
+
+// ─── Voice Input ───
+
+function toggleVoice() {
+  if (isRecording) {
+    stopVoice();
+    return;
+  }
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    showBanner('Voice input not supported in this browser', 'warning');
+    setTimeout(hideBanner, 3000);
+    return;
+  }
+
+  speechRecognition = new SpeechRecognition();
+  speechRecognition.continuous = true;
+  speechRecognition.interimResults = true;
+  speechRecognition.lang = 'en-GB';
+
+  const input = document.getElementById('prompt-input');
+  const btn = document.getElementById('mic-btn');
+  let finalTranscript = input.value;
+
+  speechRecognition.onresult = (event) => {
+    let interim = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (event.results[i].isFinal) {
+        finalTranscript += event.results[i][0].transcript + ' ';
+      } else {
+        interim += event.results[i][0].transcript;
+      }
+    }
+    input.value = finalTranscript + interim;
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  };
+
+  speechRecognition.onerror = (e) => {
+    if (e.error !== 'aborted') {
+      console.error('Speech error:', e.error);
+    }
+    stopVoice();
+  };
+
+  speechRecognition.onend = () => {
+    if (isRecording) {
+      // Restart if still in recording mode (browser auto-stops after silence)
+      try { speechRecognition.start(); } catch { stopVoice(); }
+    }
+  };
+
+  speechRecognition.start();
+  isRecording = true;
+  btn.classList.add('recording');
+  btn.textContent = 'Stop';
+}
+
+function stopVoice() {
+  if (speechRecognition) {
+    isRecording = false;
+    try { speechRecognition.stop(); } catch { /* ignore */ }
+    speechRecognition = null;
+  }
+  const btn = document.getElementById('mic-btn');
+  btn.classList.remove('recording');
+  btn.textContent = 'Mic';
 }
 
 async function togglePause() {

@@ -13,9 +13,11 @@ import type { Logger } from 'pino';
  */
 
 // SDK types we need
+type MessageContent = string | Array<{ type: string; [key: string]: unknown }>;
+
 interface SDKUserMessage {
   type: 'user';
-  message: { role: 'user'; content: string };
+  message: { role: 'user'; content: MessageContent };
   parent_tool_use_id: string | null;
 }
 
@@ -54,7 +56,7 @@ export function getToolFn() { return toolFn; }
 export class AgentAdapter {
   private sessions = new Map<string, AgentSession>();
   private messageResolvers = new Map<string, () => void>();
-  private messageQueues = new Map<string, Array<{ message: string; resolve: () => void }>>();
+  private messageQueues = new Map<string, Array<{ message: MessageContent; resolve: () => void }>>();
   private outputCallbacks = new Map<string, (data: string) => void>();
   private queryHandles = new Map<string, { close: () => void }>();
   private logger: Logger;
@@ -315,7 +317,7 @@ export class AgentAdapter {
 
   // ─── Message Sending ───
 
-  async sendMessage(agentId: string, message: string): Promise<void> {
+  async sendMessage(agentId: string, message: string | MessageContent): Promise<void> {
     const session = this.sessions.get(agentId);
     if (!session || session.status !== 'running') {
       throw new Error(`Agent ${agentId} is not running`);

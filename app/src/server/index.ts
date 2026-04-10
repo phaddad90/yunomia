@@ -253,7 +253,7 @@ async function main() {
   // ─── Express + HTTP ───
 
   const app = express();
-  app.use(express.json({ limit: '16kb' }));
+  app.use(express.json({ limit: '10mb' })); // Large limit for image attachments
 
   // Rate limiting
   const promptLimiter = rateLimit({ windowMs: 5000, max: 1, message: { error: 'Rate limited — 1 prompt per 5 seconds' } });
@@ -444,15 +444,34 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
   app.post('/api/prompt', async (req, res) => {
     safety.recordHumanInteraction();
     metrics.record('human_interaction', { action: 'prompt' });
-    const { message } = req.body;
+    const { message, images } = req.body;
     if (!message || typeof message !== 'string') return res.status(400).json({ error: 'Message required' });
     if (message.length > 8000) return res.status(400).json({ error: 'Prompt max 8000 characters' });
+    if (images && (!Array.isArray(images) || images.length > 5)) {
+      return res.status(400).json({ error: 'Max 5 images per message' });
+    }
 
     const ceo = adapter.getCeoSession();
     if (!ceo) return res.status(503).json({ error: 'CEO not running' });
 
+    // Build content: text + optional images
+    let content: string | Array<{ type: string; [key: string]: unknown }> = message;
+    if (images && images.length > 0) {
+      const blocks: Array<{ type: string; [key: string]: unknown }> = [];
+      for (const img of images) {
+        if (img.data && img.mediaType) {
+          blocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mediaType, data: img.data },
+          });
+        }
+      }
+      blocks.push({ type: 'text', text: message });
+      content = blocks;
+    }
+
     try {
-      await adapter.sendMessage(ceo.id, message);
+      await adapter.sendMessage(ceo.id, content);
       res.json({ sent: true });
     } catch (err) {
       res.status(500).json({ error: `Failed to send: ${err}` });

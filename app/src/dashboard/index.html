@@ -91,8 +91,14 @@
 
   <!-- Prompt Input -->
   <div class="prompt-bar">
-    <textarea id="prompt-input" placeholder="Prompt CEO... (Shift+Enter for new line)" rows="1"></textarea>
-    <button class="btn btn-accent" onclick="sendPrompt()">Send</button>
+    <div class="prompt-input-wrapper" id="prompt-wrapper">
+      <div id="image-previews" class="image-previews"></div>
+      <textarea id="prompt-input" placeholder="Prompt CEO... (Shift+Enter for new line, drop images here)" rows="1"></textarea>
+    </div>
+    <div class="prompt-buttons">
+      <button class="btn btn-mic" id="mic-btn" onclick="toggleVoice()" title="Voice input (V)">Mic</button>
+      <button class="btn btn-accent" onclick="sendPrompt()">Send</button>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
