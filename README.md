@@ -209,13 +209,34 @@ A single Claude Code session runs $5-15/day. Eunomia runs 4-6x that for multi-ag
 
 ## Roadmap
 
-**v1.1** — Model routing per-heartbeat. Worker output summarisation. Configurable cold-start prompts.
+**v1.1 — Sharper CEO**
+- Model routing per-heartbeat (Sonnet for routine, Opus for strategy)
+- Worker output summarisation (CEO writes digest, raw output archived)
+- Configurable cold-start prompt templates
 
-**v1.2** — Historical cost graphs. Worker success rate trends. Browser notifications. Command palette.
+**v1.2 — Better visibility**
+- Historical cost graph on Status tab (last 7 days)
+- Worker success rate trend line
+- Browser notifications on worker completion and safety alerts
+- Command palette in prompt input (`/pause`, `/status`, `/spawn`)
 
-**v1.3** — Sandboxed Bash for workers. Task dependency chains. Worker-to-worker file handoff. Git auto-commit.
+**v1.3 — Smarter workers**
+- Sandboxed Bash for workers (restricted to output dir only)
+- Task dependency chains (task B blocked until task A completes)
+- Worker-to-worker file handoff (output of A becomes input for B)
+- Git auto-commit on worker completion
 
-**v2.0** — Multi-project support. Team mode.
+**v2.0 — Multi-project**
+- Project switching in dashboard
+- Cross-project CEO memory
+- Shared worker pool
+
+**v3.0 — Team mode**
+- Multiple humans, role-based access
+- Goal hierarchy (goals break into tasks, progress bars roll up)
+- Confirmation mode (CEO proposes, human approves before execution)
+- Plugin system for custom MCP tools
+- Remote deployment (run Eunomia on a server, access from anywhere)
 
 ---
 
@@ -225,4 +246,4 @@ MIT
 
 ---
 
-Built by [Peter Haddad](https://github.com/phaddad90). Designed with Claude Opus 4.6. Four rounds of red-team review across token economics, architecture, UX, chaos engineering, and security.
+Built by [Peter Haddad](https://github.com/phaddad90). Designed with Claude Opus 4.6. Five rounds of red-team review (20+ specialist critics) across token economics, architecture, UX, chaos engineering, and security.
