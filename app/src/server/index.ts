@@ -276,6 +276,7 @@ async function main() {
 
     const health: HealthResponse = {
       version: process.env.npm_package_version || '1.0.0',
+      project: config.projectPath,
       status: safety.isPaused() ? 'degraded' : 'ok',
       uptime: Math.floor(process.uptime()),
       ceo: {

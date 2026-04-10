@@ -120,6 +120,7 @@ export const DEFAULT_CONFIG: EunomiaConfig = {
 
 export interface HealthResponse {
   version: string;
+  project: string;
   status: 'ok' | 'degraded' | 'error';
   uptime: number;
   ceo: {

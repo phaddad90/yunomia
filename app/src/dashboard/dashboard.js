@@ -378,9 +378,14 @@ async function refreshStatus() {
     updateStatusBar(health, heartbeat);
     updateCostBadge(health.budget);
 
-    // Version display
+    // Version + project display
     const versionEl = document.getElementById('app-version');
     if (versionEl && health.version) versionEl.textContent = 'v' + health.version;
+    if (health.project) {
+      currentProjectPath = health.project;
+      const projEl = document.getElementById('project-name');
+      if (projEl) projEl.textContent = health.project.split('/').pop() || health.project;
+    }
 
     // Fetch and render metrics
     try {
@@ -781,12 +786,13 @@ function showSleepScreen() {
     justify-content: center; gap: 16px; color: var(--text-muted);
     font-size: 14px; background: var(--bg-primary);
   `;
+  const restartCmd = `npm run dev -- --project ${currentProjectPath || '/path/to/project'}`;
   overlay.innerHTML = `
     <div style="font-size: 32px; font-weight: 600; color: var(--text-secondary); font-family: var(--font-mono);">Eunomia</div>
     <div style="color: var(--text-muted);">Session ended. All agents stopped.</div>
-    <div style="margin-top: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);">
-      Restart with: <span style="color: var(--accent);">npm run dev -- --project /path/to/project</span>
-    </div>
+    <div style="margin-top: 12px; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);">Restart with:</div>
+    <div style="margin-top: 4px; font-family: var(--font-mono); font-size: 13px; color: var(--accent); cursor: pointer; padding: 8px 16px; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border); user-select: all;"
+         title="Click to select, then Cmd+C to copy">${escapeHtml(restartCmd)}</div>
   `;
 
   // Insert after tabs
@@ -849,6 +855,7 @@ function escapeHtml(str) {
 // ─── Init ───
 
 let statusIntervalId = null;
+let currentProjectPath = '';
 
 document.addEventListener('DOMContentLoaded', () => {
   initTerminals();
