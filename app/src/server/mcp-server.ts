@@ -7,6 +7,7 @@ import type { ModelChoice, TaskPriority } from './types.js';
 import type { Logger } from 'pino';
 import { join } from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
+import { listSkills, runSkill } from './skills.js';
 
 /**
  * Eunomia MCP Server - in-process, exposed to CEO only.
@@ -171,6 +172,18 @@ export class McpServer {
           properties: {},
         },
       },
+      {
+        name: 'run_skill',
+        description: 'Run a premade skill (e.g. red-team, security-scan, code-review, brand-audit, content-review, test-suite). Creates tasks for skill workers automatically.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            skillName: { type: 'string', description: 'Name of the skill to run' },
+            config: { type: 'object', description: 'Optional skill-specific config' },
+          },
+          required: ['skillName'],
+        },
+      },
     ];
   }
 
@@ -194,6 +207,8 @@ export class McpServer {
           return await this.killWorker(input);
         case 'list_workers':
           return this.listWorkers();
+        case 'run_skill':
+          return await this.runSkillHandler(input);
         default:
           return this.error(`Unknown tool: ${toolName}`);
       }
@@ -441,6 +456,37 @@ $${task.maxBudgetUsd}
     });
 
     return this.ok(lines.join('\n'));
+  }
+
+  private async runSkillHandler(input: Record<string, unknown>): Promise<ToolResult> {
+    const skillName = input.skillName as string;
+    const skillConfig = (input.config as Record<string, string>) || {};
+
+    const skills = listSkills(this.logger);
+    const skill = skills.find(s => s.name === skillName);
+    if (!skill) {
+      const available = skills.map(s => s.name).join(', ');
+      return this.error(`Skill not found: ${skillName}. Available: ${available}`);
+    }
+
+    const result = await runSkill(
+      skill, this.projectPath, skillConfig,
+      this.adapter, this.safety, this.tasks, this.logger,
+    );
+
+    if (result.status === 'failed') {
+      return this.error(`Skill failed: ${result.error}`);
+    }
+
+    const msg = result.mode === 'multi-worker'
+      ? `Skill "${skill.name}" started - ${result.workerCount} worker tasks created. They will appear on the board.`
+      : result.mode === 'single-worker'
+        ? `Skill "${skill.name}" started - task created. It will appear on the board for spawning.`
+        : `Skill "${skill.name}" sent to you for processing.`;
+
+    this.heartbeat.notifyTaskChange();
+    this.notifyTasksChanged();
+    return this.ok(msg);
   }
 
   // ─── Helpers ───

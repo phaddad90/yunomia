@@ -803,6 +803,99 @@ async function saveSettings() {
   setTimeout(() => { statusEl.textContent = ''; }, 4000);
 }
 
+// ─── Skills ───
+
+let skillsCache = null;
+
+async function loadSkills() {
+  try {
+    const skills = await fetch('/api/skills').then(r => r.json());
+    skillsCache = skills;
+    renderSkills(skills);
+  } catch { /* ignore */ }
+}
+
+function renderSkills(skills) {
+  const container = document.getElementById('skills-list');
+  if (!skills || skills.length === 0) {
+    container.innerHTML = '<div style="grid-column: 1/-1; padding: 8px 0; font-size: 13px; color: var(--text-muted);">No skills found</div>';
+    return;
+  }
+
+  container.innerHTML = skills.map(s => `
+    <div class="skill-card" data-skill="${escapeHtml(s.name)}">
+      <div style="font-weight: 500; font-size: 13px;">${escapeHtml(s.name)}</div>
+      <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">${escapeHtml(s.description)}</div>
+      <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+        ${escapeHtml(s.mode)} ${s.workers ? '(' + s.workers.length + ' workers)' : ''} ${s.workerModel ? '[' + s.workerModel + ']' : ''}
+      </div>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.skill-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const name = card.getAttribute('data-skill');
+      const skill = skills.find(s => s.name === name);
+      if (skill) showSkillConfig(skill);
+    });
+  });
+}
+
+function showSkillConfig(skill) {
+  const card = document.getElementById('skill-config-card');
+  const form = document.getElementById('skill-config-form');
+  card.style.display = 'block';
+
+  const fields = skill.configFields || [];
+  let html = `<div style="font-size: 13px; margin-bottom: 10px;"><strong>${escapeHtml(skill.name)}</strong> - ${escapeHtml(skill.description)}</div>`;
+
+  if (fields.length > 0) {
+    html += '<div class="settings-grid">';
+    for (const field of fields) {
+      html += `<label>${escapeHtml(field.label)}<input type="text" id="skill-cfg-${escapeHtml(field.name)}" placeholder="${field.required ? 'Required' : 'Optional'}" style="padding:6px 8px;font-size:13px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);outline:none;font-family:var(--font-mono);color-scheme:dark;"></label>`;
+    }
+    html += '</div>';
+  } else {
+    html += '<div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">No configuration needed.</div>';
+  }
+
+  html += '<div style="margin-top: 10px;"><button class="btn btn-accent" id="run-skill-btn">Run Skill</button> <span id="skill-run-status" style="font-size: 12px;"></span></div>';
+  form.innerHTML = html;
+
+  document.getElementById('run-skill-btn').addEventListener('click', async () => {
+    const cfg = {};
+    for (const field of fields) {
+      const val = document.getElementById('skill-cfg-' + field.name)?.value;
+      if (val) cfg[field.name] = val;
+    }
+
+    const statusEl = document.getElementById('skill-run-status');
+    statusEl.textContent = 'Running...';
+    statusEl.style.color = 'var(--amber)';
+
+    try {
+      const result = await fetch('/api/skills/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skillName: skill.name, config: cfg }),
+      }).then(r => r.json());
+
+      if (result.status === 'failed') {
+        statusEl.textContent = 'Failed: ' + (result.error || 'Unknown');
+        statusEl.style.color = 'var(--red)';
+      } else {
+        statusEl.textContent = result.mode === 'multi-worker'
+          ? `Started - ${result.workerCount} tasks created`
+          : 'Started - check Tasks tab';
+        statusEl.style.color = 'var(--green)';
+      }
+    } catch (err) {
+      statusEl.textContent = 'Error';
+      statusEl.style.color = 'var(--red)';
+    }
+  });
+}
+
 // ─── Sleep Screen ───
 
 function showSleepScreen() {
@@ -889,6 +982,7 @@ function switchTab(tab) {
   }
 
   if (tab === 'status') refreshStatus();
+  if (tab === 'skills' && !skillsCache) loadSkills();
 }
 
 // ─── Banner ───

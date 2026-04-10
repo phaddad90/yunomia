@@ -1,0 +1,7 @@
+{
+  "name": "Security Scan",
+  "description": "Deep OWASP-based security audit covering auth, injection, secrets, validation, and dependency vulnerabilities",
+  "mode": "single-worker",
+  "workerModel": "sonnet",
+  "output": "reports/security-scan-{date}.md"
+}

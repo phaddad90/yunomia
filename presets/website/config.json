@@ -1,0 +1,7 @@
+{
+  "recommendedModel": "sonnet",
+  "heartbeatIntervalMinutes": 2,
+  "maxConcurrentWorkers": 3,
+  "workerModel": "sonnet",
+  "description": "Fullstack web development lead. Thinks in pages, components, and responsive design. Reviews for UX, accessibility, and performance. Best for website builds."
+}

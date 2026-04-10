@@ -1,0 +1,21 @@
+{
+  "name": "Brand Audit",
+  "description": "Reviews all content and copy against brand voice guidelines for tone, messaging, and audience alignment",
+  "mode": "single-worker",
+  "workerModel": "opus",
+  "output": "reports/brand-audit-{date}.md",
+  "configFields": [
+    {
+      "name": "brandGuidelinesPath",
+      "label": "Path to brand guidelines or voice document",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "targetAudience",
+      "label": "Target audience description",
+      "type": "string",
+      "required": false
+    }
+  ]
+}

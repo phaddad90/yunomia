@@ -1,0 +1,21 @@
+{
+  "name": "Test Suite Runner",
+  "description": "Runs the project test suite, parses results, identifies failures, and creates actionable fix tasks",
+  "mode": "ceo",
+  "workerModel": "sonnet",
+  "output": "reports/test-suite-{date}.md",
+  "configFields": [
+    {
+      "name": "testCommand",
+      "label": "Test command to run (e.g., npm test, pytest, go test ./...)",
+      "type": "string",
+      "required": true
+    },
+    {
+      "name": "testDir",
+      "label": "Directory to run tests from (defaults to project root)",
+      "type": "string",
+      "required": false
+    }
+  ]
+}

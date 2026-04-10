@@ -30,6 +30,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="terminals" onclick="switchTab('terminals')">Terminals</div>
     <div class="tab" data-tab="tasks" onclick="switchTab('tasks')">Tasks</div>
+    <div class="tab" data-tab="skills" onclick="switchTab('skills')">Skills</div>
     <div class="tab" data-tab="status" onclick="switchTab('status')">Status</div>
   </div>
 
@@ -53,6 +54,22 @@
       <input type="text" id="add-task-input" placeholder="New task title..." onkeydown="if(event.key==='Enter')addTask()">
       <input type="datetime-local" id="add-task-schedule" title="Schedule for later (optional)">
       <button class="btn btn-accent" onclick="addTask()">Add Task</button>
+    </div>
+  </div>
+
+  <!-- Tab: Skills -->
+  <div class="tab-content" id="tab-skills">
+    <div class="status-container">
+      <div class="status-card">
+        <div class="status-card-title">Available Skills</div>
+        <div id="skills-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+          <div style="padding: 4px 0; font-size: 13px; color: var(--text-muted);">Loading...</div>
+        </div>
+      </div>
+      <div class="status-card" id="skill-config-card" style="display: none;">
+        <div class="status-card-title">Configure Skill</div>
+        <div id="skill-config-form"></div>
+      </div>
     </div>
   </div>
 

@@ -1,0 +1,7 @@
+{
+  "recommendedModel": "opus",
+  "heartbeatIntervalMinutes": 4,
+  "maxConcurrentWorkers": 2,
+  "workerModel": "sonnet",
+  "description": "Systems architect focused on tradeoffs, scalability, coupling, and failure modes. Uses Opus for deep technical reasoning. Delegates research and prototyping."
+}

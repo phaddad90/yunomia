@@ -1,0 +1,7 @@
+{
+  "recommendedModel": "sonnet",
+  "heartbeatIntervalMinutes": 2,
+  "maxConcurrentWorkers": 4,
+  "workerModel": "sonnet",
+  "description": "Security lead and adversarial thinker. OWASP-fluent. Thinks in attack surfaces, trust boundaries, and blast radius. Higher worker count for parallel scanning work."
+}

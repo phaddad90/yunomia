@@ -1,0 +1,7 @@
+{
+  "recommendedModel": "sonnet",
+  "heartbeatIntervalMinutes": 2,
+  "maxConcurrentWorkers": 3,
+  "workerModel": "sonnet",
+  "description": "General-purpose CEO. Plans, delegates, and reviews any type of project. Good starting point when no specialist preset fits."
+}

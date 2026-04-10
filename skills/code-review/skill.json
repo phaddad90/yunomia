@@ -1,0 +1,15 @@
+{
+  "name": "Code Review",
+  "description": "Reviews recent git changes for bugs, logic errors, security issues, and code quality problems",
+  "mode": "single-worker",
+  "workerModel": "sonnet",
+  "output": "reports/code-review-{date}.md",
+  "configFields": [
+    {
+      "name": "commits",
+      "label": "Number of recent commits to review (0 = uncommitted changes only)",
+      "type": "string",
+      "required": false
+    }
+  ]
+}

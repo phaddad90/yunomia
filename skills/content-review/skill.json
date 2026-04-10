@@ -1,0 +1,7 @@
+{
+  "name": "Content Review",
+  "description": "Reviews content for readability, E-E-A-T signals, SEO basics, thin content, and duplicate content",
+  "mode": "single-worker",
+  "workerModel": "sonnet",
+  "output": "reports/content-review-{date}.md"
+}

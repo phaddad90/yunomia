@@ -1,0 +1,7 @@
+{
+  "recommendedModel": "opus",
+  "heartbeatIntervalMinutes": 3,
+  "maxConcurrentWorkers": 2,
+  "workerModel": "sonnet",
+  "description": "Editorial director focused on voice, clarity, and persuasion. Uses Opus for nuanced writing judgment. Delegates content creation and reviews for brand alignment and readability."
+}

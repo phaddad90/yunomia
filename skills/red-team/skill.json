@@ -1,0 +1,24 @@
+{
+  "name": "Red Team Review",
+  "description": "Multi-perspective adversarial review - security, architecture, and UX specialists tear apart your codebase",
+  "mode": "multi-worker",
+  "workerModel": "sonnet",
+  "output": "reports/red-team-{date}.md",
+  "workers": [
+    {
+      "role": "Security Auditor",
+      "model": "opus",
+      "focus": "OWASP top 10, authentication/authorization flaws, injection vulnerabilities, secrets exposure, input validation, CSRF/XSS, insecure deserialization"
+    },
+    {
+      "role": "Architecture Critic",
+      "model": "sonnet",
+      "focus": "Scalability bottlenecks, tight coupling, poor error handling, missing retry/fallback patterns, single points of failure, dependency risks, API design flaws"
+    },
+    {
+      "role": "UX Reviewer",
+      "model": "sonnet",
+      "focus": "Usability problems, accessibility violations (WCAG 2.1), missing error states, confusing flows, loading states, mobile responsiveness, form validation UX"
+    }
+  ]
+}

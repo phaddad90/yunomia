@@ -1,0 +1,7 @@
+{
+  "recommendedModel": "sonnet",
+  "heartbeatIntervalMinutes": 2,
+  "maxConcurrentWorkers": 3,
+  "workerModel": "sonnet",
+  "description": "Tech lead for application development. Thinks in services, APIs, databases, and testing. Reviews for architecture, test coverage, and error handling."
+}

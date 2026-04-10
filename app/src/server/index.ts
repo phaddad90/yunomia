@@ -13,6 +13,8 @@ import { AgentAdapter } from './agent-adapter.js';
 import { HeartbeatScheduler } from './heartbeat.js';
 import { McpServer } from './mcp-server.js';
 import { MetricsCollector } from './metrics.js';
+import { listPresets, applyPreset } from './presets.js';
+import { listSkills, runSkill } from './skills.js';
 import type { EunomiaConfig, WsMessage, HealthResponse } from './types.js';
 import { DEFAULT_CONFIG, DEFAULT_SAFETY_CONFIG } from './types.js';
 import type { Logger } from 'pino';
@@ -35,6 +37,9 @@ function parseArgs(): EunomiaConfig {
     }
     if (args[i] === '--model' && args[i + 1]) {
       config.ceoModel = args[++i];
+    }
+    if (args[i] === '--preset' && args[i + 1]) {
+      (config as unknown as Record<string, unknown>).preset = args[++i];
     }
   }
 
@@ -232,6 +237,18 @@ async function main() {
 
   // Init project structure
   initProject(config.projectPath, config.ceoModel);
+
+  // Apply preset if specified
+  const presetName = (config as unknown as Record<string, unknown>).preset as string | undefined;
+  if (presetName) {
+    const presetConfig = applyPreset(presetName, config.projectPath, logger);
+    if (presetConfig) {
+      config.ceoModel = presetConfig.recommendedModel;
+      config.safety.heartbeatIntervalMinutes = presetConfig.heartbeatIntervalMinutes;
+      config.safety.maxConcurrentWorkers = presetConfig.maxConcurrentWorkers;
+      logger.info({ preset: presetName, model: config.ceoModel }, 'Preset applied');
+    }
+  }
 
   // Core modules
   const safety = new SafetyModule(config.safety, logger);
@@ -440,6 +457,50 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
 
   app.get('/api/metrics/report', (_req, res) => {
     res.type('text/markdown').send(metrics.getReportMarkdown(config.projectPath));
+  });
+
+  // Presets API
+  app.get('/api/presets', (_req, res) => {
+    const presets = listPresets(logger);
+    res.json(presets.map(p => ({ name: p.name, ...p.config })));
+  });
+
+  // Skills API
+  app.get('/api/skills', (_req, res) => {
+    const skills = listSkills(logger);
+    res.json(skills.map(s => ({
+      name: s.name,
+      description: s.description,
+      mode: s.mode,
+      workerModel: s.workerModel,
+      workers: s.workers,
+      configFields: s.configFields,
+    })));
+  });
+
+  app.post('/api/skills/run', async (req, res) => {
+    safety.recordHumanInteraction();
+    metrics.record('human_interaction', { action: 'prompt' });
+    const { skillName, config: skillConfig } = req.body;
+    if (!skillName) return res.status(400).json({ error: 'skillName required' });
+
+    const skills = listSkills(logger);
+    const skill = skills.find(s => s.name === skillName);
+    if (!skill) return res.status(404).json({ error: `Skill not found: ${skillName}` });
+
+    const result = await runSkill(
+      skill,
+      config.projectPath,
+      skillConfig || {},
+      adapter,
+      safety,
+      tasks,
+      logger,
+      (agentId: string) => onAgentOutput(agentId),
+      () => broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() }),
+    );
+
+    res.json(result);
   });
 
   // Prompt CEO
@@ -1047,6 +1108,11 @@ function buildSdkMcpTools(mcp: McpServer, z: typeof import('zod').z, toolFn: (..
     }, async (args) => mcp.handleToolCall('kill_worker', args)),
 
     tool('list_workers', 'List all active workers with task, runtime, and cost', {}, async (args) => mcp.handleToolCall('list_workers', args)),
+
+    tool('run_skill', 'Run a premade skill (red-team, security-scan, code-review, brand-audit, content-review, test-suite)', {
+      skillName: z.string(),
+      config: z.record(z.string(), z.string()).optional(),
+    }, async (args) => mcp.handleToolCall('run_skill', args)),
   ];
 }
 
