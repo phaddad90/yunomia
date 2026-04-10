@@ -155,12 +155,16 @@ export class HeartbeatScheduler {
     // Safety checks
     if (!this.safety.shouldFireHeartbeat()) {
       this.logger.info('Heartbeat skipped (safety block)');
-      this.metrics?.record('heartbeat', {
-        skipped: true,
-        intervalMinutes: Math.round(this.currentIntervalMs / 60000),
-        tasksChanged: false,
-      });
+      this.metrics?.record('heartbeat', { skipped: true, intervalMinutes: Math.round(this.currentIntervalMs / 60000), tasksChanged: false });
       this.pause();
+      return;
+    }
+
+    // Skip heartbeat if spawn approval is pending (CEO is blocked waiting)
+    if (this.safety.hasPendingApprovals()) {
+      this.logger.info('Heartbeat skipped (approval pending)');
+      this.metrics?.record('heartbeat', { skipped: true, intervalMinutes: Math.round(this.currentIntervalMs / 60000), tasksChanged: false });
+      this.scheduleNext();
       return;
     }
 

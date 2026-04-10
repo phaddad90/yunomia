@@ -150,11 +150,10 @@ function createWorkerTerminal(agentId) {
   const fitAddon = new FitAddon.FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(container);
-  fitAddon.fit(); // fit while visible
 
-  container.style.display = 'none'; // hide after fit
+  container.style.display = 'none'; // hidden until user clicks
 
-  workerTerminals[agentId] = { terminal, fitAddon, container };
+  workerTerminals[agentId] = { terminal, fitAddon, container, needsFit: true };
   addWorkerPill(agentId);
 }
 
@@ -178,7 +177,10 @@ function showWorkerTerminal(agentId) {
   Object.values(workerTerminals).forEach(w => w.container.style.display = 'none');
 
   workerTerminals[agentId].container.style.display = 'block';
-  workerTerminals[agentId].fitAddon.fit();
+  requestAnimationFrame(() => {
+    workerTerminals[agentId].fitAddon.fit();
+    workerTerminals[agentId].needsFit = false;
+  });
   activeTerminal = agentId;
 
   document.querySelectorAll('.worker-pill').forEach(p => p.classList.remove('active'));
@@ -204,12 +206,12 @@ function renderTasks(state) {
   const container = document.getElementById('tasks-container');
   if (!state || !state.tasks) return;
 
-  const sections = { planned: [], active: [], done: [], failed: [] };
+  const sections = { planned: [], active: [], done: [], failed: [], pulled: [] };
   state.tasks.forEach(t => sections[t.status]?.push(t));
 
-  const labels = { planned: 'Planned', active: 'Active', done: 'Done', failed: 'Failed' };
-  const checkmarks = { planned: '[ ]', active: '[~]', done: '[x]', failed: '[!]' };
-  const checkClass = { planned: '', active: 'active', done: 'done', failed: 'failed' };
+  const labels = { planned: 'Planned', active: 'Active', done: 'Done', failed: 'Failed', pulled: 'Pulled' };
+  const checkmarks = { planned: '[ ]', active: '[~]', done: '[x]', failed: '[!]', pulled: '[-]' };
+  const checkClass = { planned: '', active: 'active', done: 'done', failed: 'failed', pulled: 'pulled' };
 
   let html = '';
   for (const [status, tasks] of Object.entries(sections)) {
@@ -237,7 +239,7 @@ function renderTasks(state) {
             </div>
             <div class="task-actions">
               ${status === 'failed' ? `<button class="btn" data-action="retry" data-id="${escapeHtml(t.id)}">Retry</button>` : ''}
-              ${status === 'planned' ? `<button class="btn btn-danger" data-action="remove" data-id="${escapeHtml(t.id)}">Remove</button>` : ''}
+              ${status === 'planned' ? `<button class="btn btn-danger" data-action="pull" data-id="${escapeHtml(t.id)}">Pull</button>` : ''}
               ${status === 'active' ? `<button class="btn btn-danger" data-action="stop" data-id="${escapeHtml(t.id)}">Stop</button>` : ''}
             </div>
           </div>`;
@@ -254,7 +256,7 @@ function renderTasks(state) {
       const action = btn.getAttribute('data-action');
       const id = btn.getAttribute('data-id');
       if (action === 'retry') retryTask(id);
-      else if (action === 'remove') deleteTask(id);
+      else if (action === 'pull') pullTask(id);
       else if (action === 'stop') failTask(id);
     });
   });
@@ -282,11 +284,11 @@ async function retryTask(id) {
   });
 }
 
-async function deleteTask(id) {
+async function pullTask(id) {
   await fetch(`/api/tasks/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'done', notes: 'Removed by human' }),
+    body: JSON.stringify({ status: 'pulled', notes: 'Pulled by human' }),
   });
 }
 

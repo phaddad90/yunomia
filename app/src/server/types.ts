@@ -1,6 +1,6 @@
 // ─── Task Types ───
 
-export type TaskStatus = 'planned' | 'active' | 'done' | 'failed';
+export type TaskStatus = 'planned' | 'active' | 'done' | 'failed' | 'pulled';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'critical';
 export type ModelChoice = 'opus' | 'sonnet' | 'haiku';
 

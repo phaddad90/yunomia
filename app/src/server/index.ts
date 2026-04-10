@@ -1,4 +1,5 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import { join, resolve, dirname } from 'path';
@@ -143,30 +144,16 @@ ${discoveredContext}
 - **Role:** Strategic planning, task delegation, worker review
 - **Model:** ${ceoModel}
 
-## What You Do
-You plan and coordinate work for this project. You break the mission into tasks, decide which need a specialist worker, spawn them via MCP tools, and review their output. You delegate implementation — you do not write code yourself.
-
 ## How You Work
-- Read PROJECT.md for the mission and company goals
-- Read GOALS.md for your KPIs
-- Check TASKS.md for current task status
-- Use MCP tools (tasks_create, tasks_update, spawn_worker) to manage work
-- Review completed worker output in workers/{task-id}/output/
-- Write key decisions to MEMORY.md — specific, not generic
-- Before re-spawning a failed task, check if the worker left useful output
-
-## Rules
-- Be concise. Short updates, short memory entries.
-- Don't re-read files you've already read this session unless they've changed.
-- Don't write generic summaries to MEMORY.md. Only specific decisions, blockers, discoveries.
-- Respect token budgets. Efficiency is a virtue.
-- Max ${DEFAULT_SAFETY_CONFIG.maxConcurrentWorkers} concurrent workers.
-
-## Boundaries
-- You can read any file in the project folder
-- You can write to ceo/ and manage tasks via MCP tools
-- You cannot modify source code directly — delegate to workers
-- When unsure, note it in TASKS.md for the human to decide
+- You plan and delegate. You do not write code — workers do.
+- Read PROJECT.md for mission, GOALS.md for KPIs, TASKS.md for status.
+- Use MCP tools (tasks_create, tasks_update, spawn_worker) to manage work.
+- Review completed worker output in workers/{task-id}/output/ before marking done.
+- Before re-spawning a failed task, check if the worker left useful output.
+- Write specific decisions to MEMORY.md (not summaries). Be concise.
+- Don't re-read unchanged files. Respect token budgets. Max ${DEFAULT_SAFETY_CONFIG.maxConcurrentWorkers} workers.
+- You can read any file. You can write to ceo/ and manage tasks via MCP.
+- You cannot modify source code directly. When unsure, note it for the human.
 
 ## Personality
 Direct, no fluff. Lead with the decision, then the reasoning.
@@ -267,6 +254,13 @@ async function main() {
 
   const app = express();
   app.use(express.json({ limit: '16kb' }));
+
+  // Rate limiting
+  const promptLimiter = rateLimit({ windowMs: 5000, max: 1, message: { error: 'Rate limited — 1 prompt per 5 seconds' } });
+  const taskLimiter = rateLimit({ windowMs: 2000, max: 1, message: { error: 'Rate limited — 1 task per 2 seconds' } });
+  app.use('/api/prompt', promptLimiter);
+  app.use('/api/daily-review', promptLimiter);
+  app.post('/api/tasks', taskLimiter);
 
   // Dashboard static files
   const dashboardDir = join(__dirname, '..', 'dashboard');
@@ -660,6 +654,23 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
       }
     }
 
+    // Fast-path: detect active tasks with no running worker session and mark failed
+    for (const task of tasks.listTasks({ status: 'active' })) {
+      if (task.assignee) {
+        const workerSession = adapter.getSession(task.assignee);
+        if (!workerSession) {
+          logger.warn({ taskId: task.id, assignee: task.assignee }, 'Active task has no running worker — marking failed');
+          await tasks.updateTask(task.id, {
+            status: 'failed',
+            notes: (task.notes ? task.notes + ' | ' : '') + 'Worker crashed or completed without updating task',
+            retryCount: (task.retryCount ?? 0) + 1,
+          });
+          heartbeat.notifyTaskChange();
+          broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
+        }
+      }
+    }
+
     // CEO crash recovery with backoff — if no CEO session exists, restart it
     if (!ceoRestartPending && !adapter.getCeoSession()) {
       // Check crash frequency — stop retrying after MAX_CEO_CRASHES within the window
@@ -761,7 +772,9 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
 
     if (createMcp && toolBuilder) {
       // Build SDK MCP tools using the tool() helper
-      const z = await import('zod').then(m => m.z).catch(() => null);
+      const z = await import('zod/v4').then(m => m.z).catch(() =>
+        import('zod').then(m => m.z).catch(() => null)
+      );
       if (z) {
         const sdkTools = buildSdkMcpTools(mcp, z, toolBuilder);
         const mcpConfig = createMcp({ name: 'eunomia', tools: sdkTools });
@@ -772,6 +785,11 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
 
     if (!mcpServers) {
       logger.warn('Could not create SDK MCP server — CEO will run without MCP tools');
+      broadcast({
+        type: 'safety_alert',
+        data: { action: 'warning', reason: 'CEO started without MCP tools — task management unavailable' },
+        timestamp: new Date().toISOString(),
+      });
     }
 
     const ceoSession = await adapter.spawnSession(

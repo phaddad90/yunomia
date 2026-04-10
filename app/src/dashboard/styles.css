@@ -250,6 +250,7 @@ body {
 .task-checkbox.done { color: var(--green); }
 .task-checkbox.active { color: var(--blue); }
 .task-checkbox.failed { color: var(--red); }
+.task-checkbox.pulled { color: var(--text-muted); }
 
 .task-body { flex: 1; min-width: 0; }
 .task-title { font-weight: 500; }

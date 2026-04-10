@@ -252,7 +252,20 @@ export class SafetyModule {
     return new Promise((resolve) => {
       this.pendingApprovals.set(task.id, { task, resolve });
       this.logger.info({ taskId: task.id, title: task.title }, 'Spawn approval requested');
+
+      // 10-minute timeout — auto-reject if no response
+      setTimeout(() => {
+        if (this.pendingApprovals.has(task.id)) {
+          this.pendingApprovals.delete(task.id);
+          this.logger.warn({ taskId: task.id }, 'Spawn approval timed out — auto-rejected');
+          resolve(false);
+        }
+      }, 10 * 60 * 1000);
     });
+  }
+
+  hasPendingApprovals(): boolean {
+    return this.pendingApprovals.size > 0;
   }
 
   resolveApproval(taskId: string, approved: boolean): void {

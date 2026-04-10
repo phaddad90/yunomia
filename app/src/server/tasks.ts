@@ -108,6 +108,7 @@ export class TaskManager {
       if (trimmed === '## Active') { currentStatus = 'active'; continue; }
       if (trimmed === '## Done') { currentStatus = 'done'; continue; }
       if (trimmed === '## Failed') { currentStatus = 'failed'; continue; }
+      if (trimmed === '## Pulled') { currentStatus = 'pulled'; continue; }
 
       // Task lines: - [x] `task-001` Title [model] [priority] [$budget] — notes
       const taskMatch = trimmed.match(/^- \[(.)\] `([^`]+)` (.+)$/);
@@ -164,7 +165,7 @@ export class TaskManager {
   }
 
   private renderTasksMd(): string {
-    const sections: Record<TaskStatus, Task[]> = { planned: [], active: [], done: [], failed: [] };
+    const sections: Record<TaskStatus, Task[]> = { planned: [], active: [], done: [], failed: [], pulled: [] };
     for (const task of this.tasks) {
       sections[task.status].push(task);
     }
@@ -176,6 +177,7 @@ export class TaskManager {
       ['active', 'Active'],
       ['done', 'Done'],
       ['failed', 'Failed'],
+      ['pulled', 'Pulled'],
     ] as const) {
       md += `\n## ${label}\n\n`;
       const statusTasks = sections[status];
@@ -183,7 +185,7 @@ export class TaskManager {
         md += '_No tasks_\n';
       } else {
         for (const t of statusTasks) {
-          const marker = status === 'done' ? 'x' : status === 'active' ? '~' : status === 'failed' ? '!' : ' ';
+          const marker = status === 'done' ? 'x' : status === 'active' ? '~' : status === 'failed' ? '!' : status === 'pulled' ? '-' : ' ';
           let line = `- [${marker}] \`${t.id}\` ${t.title} [${t.model}] [${t.priority}] [$${t.maxBudgetUsd.toFixed(2)}]`;
           if (status === 'done' && t.tokenCost.totalUsd > 0) {
             line += ` [$${t.tokenCost.totalUsd.toFixed(2)} actual]`;
@@ -277,7 +279,7 @@ export class TaskManager {
   }
 
   getStatusCounts(): Record<TaskStatus, number> {
-    const counts: Record<TaskStatus, number> = { planned: 0, active: 0, done: 0, failed: 0 };
+    const counts: Record<TaskStatus, number> = { planned: 0, active: 0, done: 0, failed: 0, pulled: 0 };
     for (const t of this.tasks) counts[t.status]++;
     return counts;
   }
