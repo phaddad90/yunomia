@@ -991,7 +991,7 @@ function switchTab(tab) {
     });
   }
 
-  if (tab === 'status') { refreshStatus(); loadSoulGoals(); }
+  if (tab === 'status') { refreshStatus(); loadProjectTotal(); loadProject(); loadSoulGoals(); }
   if (tab === 'skills' && !skillsCache) loadSkills();
 }
 
@@ -1101,6 +1101,50 @@ async function submitOnboarding() {
 
 let soulLoaded = false;
 let goalsLoaded = false;
+let projectLoaded = false;
+let totalLoaded = false;
+
+async function loadProjectTotal() {
+  if (!totalLoaded) {
+    try {
+      const total = await fetch('/api/metrics/total').then(r => r.json());
+      const el = document.getElementById('project-total-rows');
+      if (el) {
+        el.innerHTML = `
+          ${statusRow('Total Cost', '$' + (total.totalCostUsd || 0).toFixed(2), total.totalCostUsd > 20 ? 'amber' : '')}
+          ${statusRow('Tasks Completed', String(total.tasksCompleted || 0), 'green')}
+          ${statusRow('Tasks Failed', String(total.tasksFailed || 0), total.tasksFailed > 0 ? 'red' : '')}
+          ${statusRow('Workers Spawned', String(total.workersSpawned || 0))}
+          ${statusRow('Sessions', String(total.sessions || 0))}
+        `;
+      }
+      totalLoaded = true;
+    } catch { /* ignore */ }
+  }
+}
+
+async function loadProject() {
+  if (!projectLoaded) {
+    try {
+      const content = await fetch('/api/project').then(r => r.text());
+      document.getElementById('project-editor').value = content;
+      projectLoaded = true;
+    } catch { /* ignore */ }
+  }
+}
+
+async function saveProject() {
+  const content = document.getElementById('project-editor').value;
+  const statusEl = document.getElementById('project-save-status');
+  await fetch('/api/project', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  statusEl.textContent = 'Saved';
+  statusEl.style.color = 'var(--green)';
+  setTimeout(() => { statusEl.textContent = ''; }, 3000);
+}
 
 async function loadSoulGoals() {
   if (!soulLoaded) {

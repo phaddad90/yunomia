@@ -133,6 +133,20 @@
         </div>
       </div>
       <div class="status-card">
+        <div class="status-card-title">Project Total</div>
+        <div id="project-total-rows">
+          <div style="padding: 4px 0; font-size: 13px; color: var(--text-muted);">Loading...</div>
+        </div>
+      </div>
+      <div class="status-card">
+        <div class="status-card-title">Project Brief</div>
+        <textarea id="project-editor" rows="10" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-family:var(--font-mono);font-size:12px;padding:8px;resize:vertical;color-scheme:dark;"></textarea>
+        <div style="margin-top:6px;display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-accent" onclick="saveProject()">Save Project</button>
+          <span id="project-save-status" style="font-size:12px;"></span>
+        </div>
+      </div>
+      <div class="status-card">
         <div class="status-card-title">CEO Soul</div>
         <textarea id="soul-editor" rows="12" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-family:var(--font-mono);font-size:12px;padding:8px;resize:vertical;color-scheme:dark;"></textarea>
         <div style="margin-top:6px;display:flex;gap:8px;align-items:center;">

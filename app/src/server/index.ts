@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import { join, resolve, dirname } from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 
 import { initLogger, rotateLogs } from './logger.js';
@@ -380,6 +380,60 @@ ${goals || '- [ ] [Goal 1]\n- [ ] [Goal 2]\n- [ ] [Goal 3]'}
     if (!content || typeof content !== 'string') return res.status(400).json({ error: 'Content required' });
     writeFileSync(join(config.projectPath, 'ceo', 'GOALS.md'), content, 'utf-8');
     res.json({ saved: true });
+  });
+
+  app.get('/api/project', (_req, res) => {
+    const projectPath = join(config.projectPath, 'PROJECT.md');
+    if (!existsSync(projectPath)) return res.status(404).json({ error: 'PROJECT.md not found' });
+    res.type('text/markdown').send(readFileSync(projectPath, 'utf-8'));
+  });
+
+  app.put('/api/project', (req, res) => {
+    safety.recordHumanInteraction();
+    const { content } = req.body;
+    if (!content || typeof content !== 'string') return res.status(400).json({ error: 'Content required' });
+    if (content.length > 5000) return res.status(400).json({ error: 'PROJECT.md max 5000 characters' });
+    writeFileSync(join(config.projectPath, 'PROJECT.md'), content, 'utf-8');
+    res.json({ saved: true });
+  });
+
+  // Running project total cost (sum all metrics files)
+  app.get('/api/metrics/total', (_req, res) => {
+    let totalCost = 0;
+    let totalTasks = 0;
+    let totalFailed = 0;
+    let totalWorkers = 0;
+    let totalSessions = 0;
+    const metricsDir = join(config.projectPath, 'metrics');
+    if (existsSync(metricsDir)) {
+      for (const file of readdirSync(metricsDir)) {
+        if (!file.endsWith('.jsonl')) continue;
+        totalSessions++;
+        try {
+          const lines = readFileSync(join(metricsDir, file), 'utf-8').trim().split('\n');
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line);
+              if (entry.event === 'worker_completed') {
+                totalCost += entry.data?.costUsd || 0;
+                if (entry.data?.success) totalTasks++;
+                else totalFailed++;
+              }
+              if (entry.event === 'worker_spawned') totalWorkers++;
+            } catch { /* skip bad line */ }
+          }
+        } catch { /* skip bad file */ }
+      }
+    }
+    // Also add current session spend
+    totalCost += safety.getDailySpend();
+    res.json({
+      totalCostUsd: Math.round(totalCost * 100) / 100,
+      tasksCompleted: totalTasks,
+      tasksFailed: totalFailed,
+      workersSpawned: totalWorkers,
+      sessions: totalSessions,
+    });
   });
 
   app.get('/health', (_req, res) => {
