@@ -9,6 +9,40 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
 </head>
 <body>
+  <!-- Onboarding (shown on first run only) -->
+  <div id="onboarding-screen" class="onboarding" style="display: none;">
+    <div class="onboarding-card">
+      <div style="font-size: 24px; font-weight: 600; font-family: var(--font-mono); margin-bottom: 4px;">Yunomia</div>
+      <div style="color: var(--text-muted); margin-bottom: 20px;">Set up your project</div>
+
+      <label>Project Name
+        <input type="text" id="ob-name" placeholder="My Project">
+      </label>
+
+      <label>Mission
+        <textarea id="ob-mission" rows="3" placeholder="What are you building and why? (1-2 sentences)"></textarea>
+      </label>
+
+      <label>Goals
+        <textarea id="ob-goals" rows="3" placeholder="- Goal 1&#10;- Goal 2&#10;- Goal 3"></textarea>
+      </label>
+
+      <label>CEO Preset
+        <select id="ob-preset"></select>
+      </label>
+
+      <label>CEO Model
+        <select id="ob-model">
+          <option value="claude-sonnet-4-6">Sonnet</option>
+          <option value="claude-opus-4-6">Opus</option>
+          <option value="claude-haiku-4-5-20251001">Haiku</option>
+        </select>
+      </label>
+
+      <button class="btn btn-accent" onclick="submitOnboarding()" style="margin-top: 12px; padding: 10px; font-size: 14px; width: 100%;">Start</button>
+    </div>
+  </div>
+
   <!-- Banner -->
   <div id="banner" class="banner"></div>
 
@@ -96,6 +130,22 @@
         <div class="status-card-title">Today's Metrics</div>
         <div id="metrics-status-rows">
           <div style="padding: 4px 0; font-size: 13px; color: var(--text-muted);">Loading...</div>
+        </div>
+      </div>
+      <div class="status-card">
+        <div class="status-card-title">CEO Soul</div>
+        <textarea id="soul-editor" rows="12" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-family:var(--font-mono);font-size:12px;padding:8px;resize:vertical;color-scheme:dark;"></textarea>
+        <div style="margin-top:6px;display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-accent" onclick="saveSoul()">Save Soul</button>
+          <span id="soul-save-status" style="font-size:12px;"></span>
+        </div>
+      </div>
+      <div class="status-card">
+        <div class="status-card-title">CEO Goals</div>
+        <textarea id="goals-editor" rows="8" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-family:var(--font-mono);font-size:12px;padding:8px;resize:vertical;color-scheme:dark;"></textarea>
+        <div style="margin-top:6px;display:flex;gap:8px;align-items:center;">
+          <button class="btn btn-accent" onclick="saveGoals()">Save Goals</button>
+          <span id="goals-save-status" style="font-size:12px;"></span>
         </div>
       </div>
       <div class="status-card">

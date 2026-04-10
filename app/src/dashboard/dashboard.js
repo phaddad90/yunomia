@@ -986,7 +986,7 @@ function switchTab(tab) {
     });
   }
 
-  if (tab === 'status') refreshStatus();
+  if (tab === 'status') { refreshStatus(); loadSoulGoals(); }
   if (tab === 'skills' && !skillsCache) loadSkills();
 }
 
@@ -1037,7 +1037,116 @@ let statusIntervalId = null;
 let currentProjectPath = '';
 let activeAgentCosts = {}; // agentId -> costUsd
 
-document.addEventListener('DOMContentLoaded', () => {
+// ─── Onboarding ───
+
+async function checkOnboarding() {
+  try {
+    const data = await fetch('/api/onboarding').then(r => r.json());
+    if (data.needsOnboarding) {
+      showOnboarding(data);
+      return true;
+    }
+  } catch { /* server not ready yet */ }
+  return false;
+}
+
+function showOnboarding(data) {
+  document.getElementById('onboarding-screen').style.display = 'flex';
+
+  // Set project name from path
+  document.getElementById('ob-name').value = data.projectName || '';
+
+  // Populate preset dropdown
+  const presetSelect = document.getElementById('ob-preset');
+  presetSelect.innerHTML = '';
+  for (const p of (data.presets || [])) {
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = `${p.name} - ${p.description || ''}`;
+    presetSelect.appendChild(opt);
+  }
+
+  // Set model
+  if (data.currentModel) {
+    document.getElementById('ob-model').value = data.currentModel;
+  }
+}
+
+async function submitOnboarding() {
+  const body = {
+    projectName: document.getElementById('ob-name').value,
+    mission: document.getElementById('ob-mission').value,
+    goals: document.getElementById('ob-goals').value,
+    preset: document.getElementById('ob-preset').value,
+    model: document.getElementById('ob-model').value,
+  };
+
+  await fetch('/api/onboarding', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  document.getElementById('onboarding-screen').style.display = 'none';
+  // Reload to start fresh with the new config
+  location.reload();
+}
+
+// ─── SOUL / GOALS Editors ───
+
+let soulLoaded = false;
+let goalsLoaded = false;
+
+async function loadSoulGoals() {
+  if (!soulLoaded) {
+    try {
+      const soul = await fetch('/api/ceo/soul').then(r => r.text());
+      document.getElementById('soul-editor').value = soul;
+      soulLoaded = true;
+    } catch { /* ignore */ }
+  }
+  if (!goalsLoaded) {
+    try {
+      const goals = await fetch('/api/ceo/goals').then(r => r.text());
+      document.getElementById('goals-editor').value = goals;
+      goalsLoaded = true;
+    } catch { /* ignore */ }
+  }
+}
+
+async function saveSoul() {
+  const content = document.getElementById('soul-editor').value;
+  const statusEl = document.getElementById('soul-save-status');
+  await fetch('/api/ceo/soul', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  statusEl.textContent = 'Saved';
+  statusEl.style.color = 'var(--green)';
+  setTimeout(() => { statusEl.textContent = ''; }, 3000);
+}
+
+async function saveGoals() {
+  const content = document.getElementById('goals-editor').value;
+  const statusEl = document.getElementById('goals-save-status');
+  await fetch('/api/ceo/goals', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  statusEl.textContent = 'Saved';
+  statusEl.style.color = 'var(--green)';
+  setTimeout(() => { statusEl.textContent = ''; }, 3000);
+}
+
+// ─── Init ───
+
+document.addEventListener('DOMContentLoaded', async () => {
+  // Check onboarding first
+  const needsOnboarding = await checkOnboarding();
+  if (needsOnboarding) return; // Don't init anything else until onboarding completes
+
   initTerminals();
   initPromptInput();
   connectWs();

@@ -292,6 +292,81 @@ async function main() {
   app.use(express.static(staticDir));
 
   // Health endpoint
+  // Onboarding check
+  app.get('/api/onboarding', (_req, res) => {
+    const projectMd = join(config.projectPath, 'PROJECT.md');
+    const needsOnboarding = !existsSync(projectMd) || readFileSync(projectMd, 'utf-8').includes('[Describe what you are building');
+    const presetsList = listPresets(logger);
+    res.json({
+      needsOnboarding,
+      projectPath: config.projectPath,
+      projectName: config.projectPath.split('/').pop(),
+      presets: presetsList.map(p => ({ name: p.name, ...p.config })),
+      currentModel: config.ceoModel,
+    });
+  });
+
+  app.post('/api/onboarding', async (req, res) => {
+    const { projectName, mission, goals, preset, model } = req.body;
+
+    // Apply preset if selected
+    if (preset && preset !== 'default') {
+      applyPreset(preset, config.projectPath, logger);
+    }
+
+    // Write PROJECT.md
+    const projectMd = `# PROJECT - ${projectName || config.projectPath.split('/').pop()}
+
+## Mission
+
+${mission || '[Describe what you are building and why]'}
+
+## Goals
+
+${goals || '- [ ] [Goal 1]\n- [ ] [Goal 2]\n- [ ] [Goal 3]'}
+
+## Constraints
+
+- **Budget:** Stay under $${config.safety.maxDailyBudgetUsd}/day
+- **Workers:** Max ${config.safety.maxConcurrentWorkers} concurrent
+`;
+    writeFileSync(join(config.projectPath, 'PROJECT.md'), projectMd);
+
+    // Update model if changed
+    if (model) config.ceoModel = model;
+
+    res.json({ success: true });
+  });
+
+  // CEO files (read/write SOUL.md, GOALS.md)
+  app.get('/api/ceo/soul', (_req, res) => {
+    const soulPath = join(config.projectPath, 'ceo', 'SOUL.md');
+    if (!existsSync(soulPath)) return res.status(404).json({ error: 'SOUL.md not found' });
+    res.type('text/markdown').send(readFileSync(soulPath, 'utf-8'));
+  });
+
+  app.put('/api/ceo/soul', (req, res) => {
+    safety.recordHumanInteraction();
+    const { content } = req.body;
+    if (!content || typeof content !== 'string') return res.status(400).json({ error: 'Content required' });
+    writeFileSync(join(config.projectPath, 'ceo', 'SOUL.md'), content, 'utf-8');
+    res.json({ saved: true });
+  });
+
+  app.get('/api/ceo/goals', (_req, res) => {
+    const goalsPath = join(config.projectPath, 'ceo', 'GOALS.md');
+    if (!existsSync(goalsPath)) return res.status(404).json({ error: 'GOALS.md not found' });
+    res.type('text/markdown').send(readFileSync(goalsPath, 'utf-8'));
+  });
+
+  app.put('/api/ceo/goals', (req, res) => {
+    safety.recordHumanInteraction();
+    const { content } = req.body;
+    if (!content || typeof content !== 'string') return res.status(400).json({ error: 'Content required' });
+    writeFileSync(join(config.projectPath, 'ceo', 'GOALS.md'), content, 'utf-8');
+    res.json({ saved: true });
+  });
+
   app.get('/health', (_req, res) => {
     const ceo = adapter.getCeoSession();
     const mem = process.memoryUsage();
