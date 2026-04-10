@@ -1,183 +1,207 @@
-# Eunomia Product Brief
+# Eunomia Product Brief (v3)
+
+> Revised 2026-04-10 after three-specialist red team review.
 
 ## What We're Building
 
-A subscription product that gives Claude Pro/Max users a visual command centre for AI agents. They download an app (or get a hosted URL), point it at their project, and watch agents build. No terminal. No CLI knowledge. One login.
+A subscription product that gives Claude users a visual command centre for AI agents. Desktop app is the entry point - cheap, low friction, gets users in. Cloud version is the upgrade - higher margin, zero installs, premium features.
 
-Three tiers:
-- **Free** - open-source repo, self-hosted, no support
-- **Desktop ($5/mo)** - Tauri app (Mac + Windows), auto-updates, email support
-- **Hosted ($15/mo)** - eunomia.app instance, zero installs, priority support
-- **Team ($25/mo)** - hosted + multi-user + shared workers
+The desktop app is a marketing tool for the cloud version.
 
 ## Target User
 
-The 99% of Claude subscribers who've never opened a terminal. They know Claude is powerful. They've heard about Claude Code. They're intimidated by the command line. They want AI agents working for them but don't know where to start.
+Developers and technical founders who understand software but prefer a dashboard over a terminal. They have Claude Pro/Max or an API key. They have projects. They just don't want to manage agents from the command line.
 
-Our message: "You tell it what to build. It builds it. You watch."
+Not non-technical users. Not people who've never coded. The target is: "I know what I want built, I just hate the terminal."
 
-## Build Sequence
+## Pricing Strategy
 
-| Phase | What | Time | Notes |
-|-------|------|------|-------|
-| 1 | Landing page + waitlist | 1 session | Static site, Vercel deploy, email capture |
-| 2 | HN/Reddit launch of open-source repo | Same day | Free marketing, validate interest |
-| 3 | Stripe integration | 30 min | Checkout + license key validation |
-| 4 | Tauri desktop app (Mac + Windows) | 3-4 sessions | Bundles Node.js, auto-installs Claude Code CLI, user just auths |
-| 5 | Server-hosted version | 4-5 sessions | Docker per user, reverse proxy, subdomain routing |
-| 6 | CI/CD self-deploy pipeline | 1 session | GitHub Actions, auto-build Tauri + deploy server |
-| 7 | Marketing automation | 1-2 sessions | Reddit keyword scanner, draft responses, human approves |
+### Desktop App - The Hook
+
+Priced to acquire users, not to maximise revenue. The goal is volume + conversion to cloud.
+
+Exact price TBD pending competitor analysis once we have a shippable app. Ballpark: $5-15/mo. Low enough to be an impulse buy. High enough to filter out people who won't use it.
+
+What they get:
+- Tauri native app (Mac + Windows)
+- All features: presets, skills, safety guardrails, metrics, voice, images
+- Auto-updates
+- Community support (Discord/GitHub)
+- Single project at a time
+
+### Cloud Version - The Business
+
+Priced for margin. This is where the money is.
+
+| Tier | Price | What's included |
+|------|-------|-----------------|
+| Cloud | $19-29/mo | Hosted instance at yourname.eunomia.app. Zero installs. We manage everything. |
+| Cloud Pro | $49-79/mo | Multi-project, team access, Telegram/Slack channels, priority support |
+| Enterprise | Custom | Self-hosted on customer's infrastructure, SLA, dedicated support |
+
+Cloud advantages over desktop (the upsell pitch):
+- No machine dependency - runs 24/7 even when your laptop is off
+- No Node.js/Claude Code setup - we handle it
+- Access from any device (phone, tablet, work machine)
+- Telegram/Slack channels (prompt your CEO from your phone)
+- Multi-project support (switch between projects in one dashboard)
+- Team features (invite collaborators, role-based access)
+- Automatic backups of project state
+- Priority support
+
+The conversion path: user downloads desktop app for $X/mo, hits limitations (laptop needs to stay on, single project, no mobile access), sees the cloud upgrade card in the dashboard, clicks upgrade.
 
 ## Architecture
 
 ### Desktop App (Tauri)
 
 ```
-Tauri App (Mac/Windows)
-  |-- Native window (OS webview, ~5MB)
-  |-- Bundled Node.js runtime
-  |-- First launch:
-  |     1. Installs Claude Code CLI (npm install -g @anthropic-ai/claude-code)
-  |     2. Opens claude login in browser
-  |     3. User authenticates with Anthropic
-  |     4. Done - ready to use
+Tauri App (~100MB)
+  |-- Native window (OS webview)
+  |-- Bundled Node.js runtime (sidecar)
+  |-- Eunomia server (runs locally)
+  |-- Dashboard in webview
   |
-  |-- Eunomia server runs as sidecar process
-  |-- Dashboard loads in the native webview
-  |-- File picker for project selection (no terminal paths)
-  |-- Auto-updater (Tauri built-in)
+  |-- First launch:
+  |     1. claude login (opens browser for Anthropic OAuth)
+  |     2. Pick a project folder (native file picker)
+  |     3. Choose a preset (or use default)
+  |     4. Go
+  |
+  |-- No npm, no terminal, no CLI knowledge needed
+  |-- Auto-updates via Tauri built-in updater
+  |-- License key validation on startup
 ```
 
-User experience: Download. Install. Login. Pick a folder. Go.
+Important correction from red team: we use the Agent SDK (`@anthropic-ai/claude-agent-sdk`), NOT the Claude Code CLI. The SDK is already bundled in node_modules. We only need the CLI's `claude login` command for authentication. No `npm install -g` step needed.
 
-### Server-Hosted Version
+### Cloud Version
 
 ```
 eunomia.app
-  |-- Landing page + auth (Stripe checkout)
-  |-- User dashboard (manage instances)
+  |-- Landing page + auth
+  |-- Stripe checkout
+  |-- Instance manager
   |
   v
-Infrastructure
-  |-- Instance Manager
-  |     |-- Spins up Docker container per user
-  |     |-- Assigns subdomain (peter.eunomia.app)
-  |     |-- Manages lifecycle (start/stop/restart)
-  |
-  |-- Reverse Proxy (nginx/Caddy)
-  |     |-- Routes subdomain to container
-  |     |-- SSL termination
-  |
-  |-- User's Container
-        |-- Eunomia server
-        |-- Their project files (persistent volume)
-        |-- Their Claude Code auth (user provides API key or OAuth)
+Per-User Container (Docker, 1GB RAM)
+  |-- Eunomia server
+  |-- User's project files (persistent volume)
+  |-- Claude auth (encrypted API key, decrypted at boot)
+  |-- Accessible at username.eunomia.app
 ```
 
-User experience: Sign up. Pay. Get a URL. Login with Claude. Upload project (or connect GitHub). Go.
+Hosting economics (1GB RAM per user):
+- Cost per user: ~$5-7/mo (Hetzner, 3-4 users per CX22)
+- At $29/mo: ~75% margin
+- At $79/mo: ~90% margin
 
-### Hosting Economics
+### API Key Security (Cloud)
 
-| Resource | Cost/user/mo | Notes |
-|----------|-------------|-------|
-| Container (512MB RAM) | $2-3 | Hetzner CX22 fits 5-10 users |
-| Storage (1GB) | $0.50 | Persistent volume |
-| Bandwidth | ~$0 | Negligible |
-| **Total** | **~$3-4** | |
-| **Price** | **$15** | |
-| **Margin** | **~75%** | |
+User provides their Anthropic API key. Stored encrypted (AES-256, key derived from user's account password). Decrypted only inside their container at runtime. Key never leaves their container. If they change their password, key is re-encrypted.
 
-### Stripe Integration
+This is how Cursor, Windsurf, and every hosted AI tool handles it.
 
-- Stripe Checkout for payment
-- On success: generate license key (UUID), store in DB
-- Desktop app: enter key on first launch, validate against API
-- Hosted: Stripe webhook creates the container automatically
-- Subscription management via Stripe Customer Portal (built-in)
+## Build Sequence
 
-## Landing Page
+| Phase | What | Notes |
+|-------|------|-------|
+| 1 | Landing page + waitlist | Validate interest before building |
+| 2 | Show HN + Reddit + Twitter launch | Open-source repo is the marketing |
+| 3 | Stripe integration | License key generation + validation |
+| 4 | Tauri desktop app (Mac first) | Bundles Node.js, native file picker, auto-updater |
+| 5 | Code signing pipeline | Apple notarization + Windows cert |
+| 6 | Windows build | After Mac is stable |
+| 7 | Competitor pricing analysis | Set desktop price based on market data |
+| 8 | Telegram channel integration | Differentiator for cloud tier upsell |
+| 9 | Cloud hosted version | Docker per-user, subdomain routing, API key custody |
+| 10 | Multi-project + team features | Cloud Pro tier justification |
 
-One page. Hero + 3 steps + pricing + FAQ + waitlist.
+## Go-to-Market (30-Day Plan)
 
-**Hero:** "Your AI team. One click."
-**Subline:** "Point Eunomia at your project. Watch AI agents build, test, and deploy. No terminal. No CLI. Just results."
+### Days 1-3: Launch
+- Record 90-second demo GIF (not video - GIFs autoplay)
+- Show HN: "Eunomia - multi-agent orchestration that cuts token waste by 80%"
+- Post video to r/ClaudeAI (not repo link - non-devs don't click GitHub)
+- GIF to Twitter/X
+- DM 5 AI YouTubers (Matt Wolfe, AI Advantage, etc.) with free access + Loom
 
-**3 steps:**
-1. Install (or sign up for hosted)
-2. Point at your project
-3. Watch it build
+### Days 4-7: Content
+- "Eunomia vs Paperclip vs raw Claude Code" comparison post (Dev.to + own site)
+- LinkedIn founder story: "I automated my dev workflow with AI agents"
+- Join 3 Facebook AI groups, start commenting helpfully
 
-**GIF/video:** 30-second dashboard demo - CEO spawning workers, terminal streaming, tasks completing.
+### Days 8-14: Community
+- Reply to every HN/Reddit comment
+- Ship one improvement based on feedback
+- Build r/ClaudeAI karma (answer questions, no links)
+- Twitter thread showing a real build session with cost breakdown
 
-**Pricing:** Simple 3-tier cards.
+### Days 15-21: Second wave
+- 5-minute YouTube walkthrough targeting "Claude Code tutorial" searches
+- Product Hunt launch (Tuesday 12:01 AM PT)
+- Dev.to: "13 safety guardrails for AI agents"
 
-**FAQ:**
-- "Do I need to know code?" - No. The CEO agent plans and delegates.
-- "What's Claude Code?" - Anthropic's AI coding tool. Eunomia makes it visual.
-- "How is this different from ChatGPT?" - ChatGPT chats. Eunomia builds.
-- "Can I use my existing Claude subscription?" - Yes. Pro, Max, or API key.
+### Days 22-30: Proof
+- Collect testimonials from first 10-20 users
+- Add social proof to landing page
+- "Week 4 update" Twitter thread with real numbers
+- First user spotlight
 
-Tech: Next.js static export or plain HTML. Deploy to Vercel.
+### Landing Page
+- Hero: "Watch AI agents build your project. Live."
+- 90-second autoplay GIF above the fold
+- 3 steps: Install. Point. Watch.
+- Social proof: "Built by a founder running a $1.4M company"
+- "Try the demo" button (read-only sandbox or interactive video)
+- Waitlist capture (expect 5-15% conversion from cold, 20-40% from warm HN)
 
-## Marketing Strategy
+### Where to find users
+- r/ClaudeAI (primary - your exact audience)
+- YouTube AI creators (reach non-devs who watch tutorials)
+- Facebook groups (AI Tools for Business, etc.)
+- Twitter/X (threads showing real sessions)
+- LinkedIn (founder story posts)
+- NOT r/programming, r/artificial (wrong audience)
 
-### Launch Day
-1. Post open-source repo to Hacker News (Show HN)
-2. Post to r/ClaudeAI, r/ChatGPTPro, r/artificial, r/SideProject
-3. Post to Twitter/X with dashboard GIF
-4. Dev.to article: "I built a visual orchestrator for Claude Code agents"
+## Revenue Projections (Conservative)
 
-### Ongoing
-- Reddit keyword scanner: monitor "claude code", "ai agents", "multi agent", "claude pro", "claude max"
-- Draft helpful responses (not spam) when people ask about Claude Code
-- Human reviews and posts (no auto-posting - Reddit bans bots)
-- Weekly blog post / changelog
-- YouTube: 3-minute demo video
-- ProductHunt launch when desktop app is ready
+Assumes 5% free-to-paid conversion, blended average price.
 
-### Content Angle
-Don't sell the product. Sell the transformation: "I went from typing prompts to running an AI company." Share the journey, the red team process, the token efficiency research. Developers respect transparency.
+| Milestone | Free | Desktop Paid | Cloud Paid | MRR | Timeline |
+|-----------|------|-------------|------------|-----|----------|
+| Launch | 100 | 5 | 0 | ~$50 | Month 1 |
+| Traction | 500 | 25 | 5 | ~$400 | Month 3 |
+| Growth | 2000 | 80 | 20 | ~$1,400 | Month 6 |
+| Scale | 5000 | 150 | 100 | ~$4,400 | Month 12 |
 
-## Revenue Projections
+Revenue accelerates as cloud tier launches and desktop users upgrade.
 
-| Milestone | Users | MRR | Profit/mo | Timeline |
-|-----------|-------|-----|-----------|----------|
-| Launch | 50 free, 10 paid | $150 | $100 | Month 1 |
-| Traction | 200 free, 50 paid | $750 | $500 | Month 3 |
-| Growth | 500 free, 150 paid | $2,250 | $1,500 | Month 6 |
-| Scale | 2000 free, 500 paid | $7,500 | $5,500 | Month 12 |
-
-Conservative. Assumes average $15/user (mix of desktop + hosted).
-
-## Risks
+## Risk Register
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| Anthropic builds their own hosted orchestrator | High | Ship fast, build community, add multi-provider support |
-| Claude Code CLI changes break Eunomia | Medium | Agent adapter layer already isolates SDK dependency |
-| Low conversion from free to paid | Medium | Hosted version is the conversion engine - convenience sells |
-| Support burden at scale | Medium | Self-service docs, community Discord, hosted version reduces "works on my machine" issues |
-| Paperclip launches hosted version | Medium | Token efficiency + UX + safety are differentiators. They have tech debt, we don't. |
+| Anthropic changes/deprecates Agent SDK | Critical | Agent adapter layer. Multi-provider abstraction. Ship features they won't build. |
+| Anthropic builds their own dashboard | High | Speed. Community. Features (Telegram, teams, presets, skills). |
+| Paperclip launches hosted version | Medium | Token efficiency + UX + safety are differentiators. |
+| Low free-to-paid conversion | Medium | Desktop is the hook. Cloud convenience drives upgrades. |
+| Support burden from non-technical users | Medium | Repositioned target to developers-who-prefer-dashboards. Self-service docs. |
+| macOS notarization / Windows SmartScreen | Medium | $400/yr certs. SmartScreen reputation builds with installs. |
+| API key custody liability (cloud) | Medium | AES-256 encryption. Per-container isolation. Documented risk. |
 
-## Future Features
+## Future Features (Post-Launch)
 
-### Channels (Remote Access)
-Connect Slack, Telegram, Discord, WhatsApp into Eunomia. Prompt the CEO from your phone. Get notifications when workers complete. Review task output on the go.
-
-- Telegram Bot API (simplest - no approval process, instant setup)
-- Slack App (workspace install, richer UI with blocks/buttons)
-- Discord Bot (community-friendly)
-- WhatsApp Business API (harder to get approved)
-
-MVP: Telegram bot. User links their Telegram to their Eunomia instance. Messages to the bot go to the CEO. CEO responses come back. Task completions trigger notifications. All from your pocket.
-
-### Self-Developing Pipeline
-Eunomia runs against its own repo. CEO creates feature branches, workers implement, CEO reviews. Human approves PRs. GitHub Actions builds and deploys on merge. The product improves itself.
+- **Channels:** Telegram bot (MVP), Slack app, Discord bot. Prompt CEO from phone.
+- **Self-development:** Eunomia runs against its own repo. CEO creates features, workers implement, human approves PRs.
+- **Marketing automation:** Reddit keyword scanner for market intelligence. Draft responses for human review.
+- **Onboarding templates:** "Build me a landing page", "Add auth to my app", "Write tests for this repo". Pre-built first-run prompts.
+- **Churn prevention:** Weekly email digests, saved configurations, prompt history.
+- **Multi-provider:** Support Codex, Gemini CLI alongside Claude. Platform, not wrapper.
 
 ## Open Decisions
 
-1. **Domain** - eunomia.app? eunomia.dev? eunomia.ai?
-2. **Naming** - keep "Eunomia" or rebrand for consumer market?
-3. **GitHub repo** - keep public (marketing) or go private (protect IP)?
-4. **First hosted provider** - Hetzner (cheapest), DigitalOcean (easiest), Railway (container-native)?
-5. **Desktop first or hosted first?** - Recommendation: both in parallel. Landing page validates demand, desktop app is the simpler product, hosted is the better business.
+1. **Domain:** eunomia.app? eunomia.dev? Different name entirely?
+2. **Trademark:** "Eunomia" is used by a Mastodon moderation tool. Check before investing in brand.
+3. **Desktop price:** TBD after competitor analysis. Ballpark $5-15/mo.
+4. **GitHub repo:** Keep public (marketing) or go private (protect IP)? Recommendation: public with a commercial license (BSL or similar).
+5. **First cloud host:** Hetzner (cheapest) or Railway (easiest container management)?
