@@ -737,8 +737,9 @@ async function togglePause() {
 
 async function stopAll() {
   if (!confirm('Stop all agents and shut down?')) return;
-  await fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
   showSleepScreen();
+  // Fire shutdown AFTER sleep screen is showing - server may die before response
+  fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
 }
 
 async function approveSpawn(taskId) {
