@@ -224,33 +224,38 @@ A single Claude Code session runs $5-15/day. Eunomia runs 4-6x that for multi-ag
 ## Roadmap
 
 **v1.1 — Sharper CEO** *(next)*
-- Model routing per-heartbeat (Sonnet for routine checks, Opus for strategic planning)
+- Model routing per-heartbeat (Sonnet for routine, Opus for strategy)
 - Worker output summarisation (CEO writes digest, raw output archived)
 - Configurable cold-start prompt templates
 
-**v1.2 — Better visibility**
-- Historical cost graph on Status tab (last 7 days)
-- Worker success rate trend line
-- Browser notifications on worker completion and safety alerts
-- Command palette in prompt input (`/pause`, `/status`, `/spawn`)
+**v1.2 — Preset Agents + Skills**
+- 7 CEO presets: Default, Branding, Website, App Dev, Copywriting, Architecture, Security
+- Preset selector at project init (`--preset branding`) or in dashboard
+- Skills framework: callable workflows with prompt templates and config
+- Built-in skills: Red Team, Security Scan, Code Review, Brand Audit, Content Review, Test Suite
+- CEO can invoke skills via MCP tool (`run_skill`)
+- Save custom presets from your current CEO config
 
-**v1.3 — Smarter workers**
+**v1.3 — Smarter Workers + Deploy**
 - Sandboxed Bash for workers (restricted to output dir only)
 - Task dependency chains (task B blocked until task A completes)
 - Worker-to-worker file handoff (output of A becomes input for B)
+- Deploy skills: SSH and FTP with per-project config
 - Git auto-commit on worker completion
 
-**v2.0 — Multi-project**
+**v2.0 — Better Visibility + Multi-project**
+- Historical cost graph on Status tab (last 7 days)
+- Worker success rate trends
+- Browser notifications on worker completion and safety alerts
+- Command palette in prompt input (`/pause`, `/status`, `/spawn`, `/skill red-team`)
 - Project switching in dashboard
 - Cross-project CEO memory
-- Shared worker pool
 
-**v3.0 — Team mode**
+**v3.0 — Team Mode**
 - Multiple humans, role-based access
 - Goal hierarchy with progress rollup
 - Confirmation mode (CEO proposes, human approves)
-- Plugin system for custom MCP tools
-- Remote deployment
+- Remote deployment (run Eunomia on a server, access from anywhere)
 
 ---
 
