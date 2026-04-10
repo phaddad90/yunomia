@@ -185,16 +185,18 @@ export class HeartbeatScheduler {
     const tasksChanged = currentHash !== this.lastTaskHash;
     this.lastTaskHash = currentHash;
 
-    if (!tasksChanged) {
+    // Don't back off if workers are active - CEO needs to monitor them
+    const hasActiveWorkers = this.adapter.getActiveWorkerCount() > 0;
+
+    if (!tasksChanged && !hasActiveWorkers) {
       this.consecutiveNoOps++;
       if (this.consecutiveNoOps >= 3) {
-        // Back off: double interval (max 60 min)
         this.state = 'backing_off';
         this.currentIntervalMs = Math.min(this.currentIntervalMs * 2, this.maxIntervalMs);
         this.logger.info({
           consecutiveNoOps: this.consecutiveNoOps,
           newIntervalMin: Math.round(this.currentIntervalMs / 60000),
-        }, 'Heartbeat backing off (no task changes)');
+        }, 'Heartbeat backing off (idle)');
       }
     } else {
       this.consecutiveNoOps = 0;

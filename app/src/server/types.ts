@@ -22,6 +22,7 @@ export interface Task {
   notes: string;
   parentGoal?: string;
   scheduledFor?: string; // ISO datetime - task moves to planned when time arrives
+  maxRuntimeMinutes?: number; // per-task timeout override
 }
 
 export interface TasksState {
@@ -94,7 +95,7 @@ export interface SafetyConfig {
 export const DEFAULT_SAFETY_CONFIG: SafetyConfig = {
   maxConcurrentWorkers: 3,
   maxDailyBudgetUsd: 50,
-  maxWorkerRuntimeMinutes: 30,
+  maxWorkerRuntimeMinutes: 60,
   maxRetries: 2,
   inactivityPauseMinutes: 60,
   heartbeatIntervalMinutes: 10,

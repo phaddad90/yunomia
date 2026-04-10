@@ -120,6 +120,7 @@ function handleTerminalOutput(agentId, data) {
   if (!agentId || agentId === 'ceo') {
     if (ceoTerminal) {
       ceoTerminal.write(normalized);
+      ceoTerminal.scrollToBottom();
       // Timestamp after CEO stops sending for 2 seconds
       if (ceoOutputTimer) clearTimeout(ceoOutputTimer);
       ceoOutputTimer = setTimeout(() => {
@@ -132,6 +133,7 @@ function handleTerminalOutput(agentId, data) {
       createWorkerTerminal(agentId);
     }
     workerTerminals[agentId].terminal.write(normalized);
+    workerTerminals[agentId].terminal.scrollToBottom();
   }
 }
 

@@ -143,7 +143,7 @@ Thirteen guardrails. All SDK-enforced. Not prompt-based suggestions.
 |-------|-------------|---------|
 | Concurrency cap | Rejects spawn if at limit | 3 workers |
 | Daily budget | Warns at 80%, hard stops at 100% | $50/day |
-| Worker timeout | Kills worker, marks task failed | 30 min |
+| Worker timeout | Kills worker, marks task failed | 60 min |
 | Retry limit | Marks task failed, needs human | 2 retries |
 | Inactivity pause | Pauses heartbeat when you're away | 60 min |
 | Working hours | Pauses outside hours, auto-resumes | Off |

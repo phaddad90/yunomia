@@ -301,14 +301,15 @@ export class SafetyModule {
 
   // ─── Worker Timeout Check ───
 
-  isWorkerTimedOut(startTime: number): boolean {
+  isWorkerTimedOut(startTime: number, perTaskMinutes?: number): boolean {
     const elapsed = Date.now() - startTime;
-    return elapsed > this.config.maxWorkerRuntimeMinutes * 60 * 1000;
+    const maxMinutes = perTaskMinutes || this.config.maxWorkerRuntimeMinutes;
+    return elapsed > maxMinutes * 60 * 1000;
   }
 
-  getWorkerRemainingMinutes(startTime: number): number {
+  getWorkerRemainingMinutes(startTime: number, perTaskMinutes?: number): number {
     const elapsed = Date.now() - startTime;
-    const maxMs = this.config.maxWorkerRuntimeMinutes * 60 * 1000;
+    const maxMs = (perTaskMinutes || this.config.maxWorkerRuntimeMinutes) * 60 * 1000;
     return Math.max(0, Math.floor((maxMs - elapsed) / 60000));
   }
 }

@@ -730,7 +730,8 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
     // Worker timeouts
     for (const session of adapter.getActiveSessions('worker')) {
       const startTime = new Date(session.info.startedAt).getTime();
-      if (safety.isWorkerTimedOut(startTime)) {
+      const task = session.taskId ? tasks.getTask(session.taskId) : undefined;
+      if (safety.isWorkerTimedOut(startTime, task?.maxRuntimeMinutes)) {
         logger.warn({ agentId: session.id, taskId: session.taskId }, 'Worker timed out');
         try {
           // Capture info before kill
