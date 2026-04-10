@@ -67,6 +67,9 @@ function parseArgs(): YunomiaConfig {
         if (typeof s.heartbeatIntervalMinutes === 'number' && s.heartbeatIntervalMinutes >= 1 && s.heartbeatIntervalMinutes <= 60) valid.heartbeatIntervalMinutes = s.heartbeatIntervalMinutes;
         if (typeof s.maxCeoSessionHours === 'number' && s.maxCeoSessionHours >= 1 && s.maxCeoSessionHours <= 24) valid.maxCeoSessionHours = s.maxCeoSessionHours;
         if (typeof s.maxPlannedTasks === 'number' && s.maxPlannedTasks >= 5 && s.maxPlannedTasks <= 100) valid.maxPlannedTasks = s.maxPlannedTasks;
+        if (typeof s.stallNudgeMinutes === 'number' && s.stallNudgeMinutes >= 1 && s.stallNudgeMinutes <= 10) valid.stallNudgeMinutes = s.stallNudgeMinutes;
+        if (typeof s.stallKillMinutes === 'number' && s.stallKillMinutes >= 2 && s.stallKillMinutes <= 15) valid.stallKillMinutes = s.stallKillMinutes;
+        if (typeof s.hardTimeoutMinutes === 'number' && s.hardTimeoutMinutes >= 5 && s.hardTimeoutMinutes <= 120) valid.hardTimeoutMinutes = s.hardTimeoutMinutes;
         if (typeof s.requireApprovalForSpawn === 'boolean') valid.requireApprovalForSpawn = s.requireApprovalForSpawn;
         config.safety = valid;
       }
@@ -800,10 +803,16 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
 
   const lastKnownCost = new Map<string, number>();
   const lastKnownTokens = new Map<string, { tokens: number; time: number }>();
-  const nudgedWorkers = new Set<string>(); // track which workers have been nudged
-  const NUDGE_THRESHOLD_MS = 2 * 60 * 1000;  // 2 min no tokens = nudge
-  const STALL_THRESHOLD_MS = 5 * 60 * 1000;  // 5 min no tokens = kill
-  const HARD_TIMEOUT_MS = 15 * 60 * 1000;    // 15 min total = hard kill regardless
+  const nudgedWorkers = new Set<string>();
+
+  function getStallThresholds() {
+    const c = safety.getConfig();
+    return {
+      nudgeMs: c.stallNudgeMinutes * 60 * 1000,
+      killMs: c.stallKillMinutes * 60 * 1000,
+      hardMs: c.hardTimeoutMinutes * 60 * 1000,
+    };
+  }
 
   adapter.setOnCostUpdate((agentId, costUsd, tokensInput, tokensOutput) => {
     const previous = lastKnownCost.get(agentId) || 0;
@@ -901,20 +910,22 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
       const activity = lastKnownTokens.get(session.id);
       const silentMs = activity ? (Date.now() - activity.time) : elapsed;
 
-      // Stage 1: Nudge at 2 min silence
-      if (silentMs > NUDGE_THRESHOLD_MS && !nudgedWorkers.has(session.id)) {
+      const thresholds = getStallThresholds();
+
+      // Stage 1: Nudge at configured silence threshold
+      if (silentMs > thresholds.nudgeMs && !nudgedWorkers.has(session.id)) {
         nudgedWorkers.add(session.id);
         logger.info({ agentId: session.id, silentSec: Math.round(silentMs / 1000) }, 'Nudging stalled worker');
         adapter.sendMessage(session.id, 'You appear to be stalled. If you are working, continue. If you are stuck, write what you have to the output directory and stop.').catch(() => {});
         continue; // give it a chance to respond before killing
       }
 
-      // Stage 2: Kill at 5 min silence
-      const isStalled = silentMs > STALL_THRESHOLD_MS;
+      // Stage 2: Kill at configured silence threshold
+      const isStalled = silentMs > thresholds.killMs;
 
-      // Stage 3: Hard timeout (15 min default, or per-task override)
+      // Stage 3: Hard timeout (configurable, per-task override available)
       const task = session.taskId ? tasks.getTask(session.taskId) : undefined;
-      const hardTimeoutMs = task?.maxRuntimeMinutes ? task.maxRuntimeMinutes * 60 * 1000 : HARD_TIMEOUT_MS;
+      const hardTimeoutMs = task?.maxRuntimeMinutes ? task.maxRuntimeMinutes * 60 * 1000 : thresholds.hardMs;
       const hardTimeout = elapsed > hardTimeoutMs;
 
       const reason = isStalled ? `stalled (no tokens for ${Math.round(silentMs / 60000)}min)` : hardTimeout ? `hard timeout (${Math.round(elapsed / 60000)}min)` : null;

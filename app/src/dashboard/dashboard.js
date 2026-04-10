@@ -769,7 +769,9 @@ function loadSettingsValues(config, ceoModel) {
   set('setting-max-workers', config.maxConcurrentWorkers);
   set('setting-budget', config.maxDailyBudgetUsd);
   set('setting-heartbeat', config.heartbeatIntervalMinutes);
-  set('setting-worker-timeout', config.maxWorkerRuntimeMinutes);
+  set('setting-stall-nudge', config.stallNudgeMinutes);
+  set('setting-stall-kill', config.stallKillMinutes);
+  set('setting-hard-timeout', config.hardTimeoutMinutes);
   set('setting-inactivity', config.inactivityPauseMinutes);
   set('setting-approval', String(config.requireApprovalForSpawn));
 }
@@ -781,7 +783,9 @@ async function saveSettings() {
     maxConcurrentWorkers: parseInt(get('setting-max-workers')),
     maxDailyBudgetUsd: parseInt(get('setting-budget')),
     heartbeatIntervalMinutes: parseInt(get('setting-heartbeat')),
-    maxWorkerRuntimeMinutes: parseInt(get('setting-worker-timeout')),
+    stallNudgeMinutes: parseInt(get('setting-stall-nudge')),
+    stallKillMinutes: parseInt(get('setting-stall-kill')),
+    hardTimeoutMinutes: parseInt(get('setting-hard-timeout')),
     inactivityPauseMinutes: parseInt(get('setting-inactivity')),
     requireApprovalForSpawn: get('setting-approval') === 'true',
   };

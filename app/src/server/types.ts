@@ -84,6 +84,9 @@ export interface SafetyConfig {
   heartbeatIntervalMinutes: number;
   maxCeoSessionHours: number;
   maxPlannedTasks: number;
+  stallNudgeMinutes: number;
+  stallKillMinutes: number;
+  hardTimeoutMinutes: number;
   requireApprovalForSpawn: boolean;
   workingHours?: {
     start: string;
@@ -101,6 +104,9 @@ export const DEFAULT_SAFETY_CONFIG: SafetyConfig = {
   heartbeatIntervalMinutes: 10,
   maxCeoSessionHours: 8,
   maxPlannedTasks: 20,
+  stallNudgeMinutes: 2,
+  stallKillMinutes: 5,
+  hardTimeoutMinutes: 15,
   requireApprovalForSpawn: false,
 };
 

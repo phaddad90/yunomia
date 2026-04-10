@@ -36,6 +36,9 @@ export class SafetyModule {
       heartbeatIntervalMinutes: (v) => typeof v === 'number' && v >= 1 && v <= 60,
       maxCeoSessionHours: (v) => typeof v === 'number' && v >= 1 && v <= 24,
       maxPlannedTasks: (v) => typeof v === 'number' && v >= 5 && v <= 100,
+      stallNudgeMinutes: (v) => typeof v === 'number' && v >= 1 && v <= 10,
+      stallKillMinutes: (v) => typeof v === 'number' && v >= 2 && v <= 15,
+      hardTimeoutMinutes: (v) => typeof v === 'number' && v >= 5 && v <= 120,
       requireApprovalForSpawn: (v) => typeof v === 'boolean',
     };
 

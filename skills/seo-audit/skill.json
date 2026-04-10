@@ -1,0 +1,11 @@
+{
+  "name": "SEO Audit",
+  "description": "Comprehensive SEO audit of the project's website - technical SEO, on-page elements, content quality, and performance",
+  "mode": "single-worker",
+  "workerModel": "sonnet",
+  "output": "reports/seo-audit-{date}.md",
+  "configFields": [
+    { "name": "siteUrl", "label": "Site URL (if deployed)", "type": "string", "required": false },
+    { "name": "framework", "label": "Framework (e.g. Next.js, Astro)", "type": "string", "required": false }
+  ]
+}
