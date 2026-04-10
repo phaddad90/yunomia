@@ -686,6 +686,13 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
       }
     }
 
+    // Activate due scheduled tasks
+    const activated = await tasks.activateDueTasks();
+    if (activated > 0) {
+      heartbeat.notifyTaskChange();
+      broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
+    }
+
     // Fast-path: detect active tasks with no running worker session and mark failed
     for (const task of tasks.listTasks({ status: 'active' })) {
       if (task.assignee) {

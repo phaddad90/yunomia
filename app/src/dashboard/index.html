@@ -49,6 +49,7 @@
     <div class="tasks-container" id="tasks-container"></div>
     <div class="add-task-bar">
       <input type="text" id="add-task-input" placeholder="New task title..." onkeydown="if(event.key==='Enter')addTask()">
+      <input type="datetime-local" id="add-task-schedule" title="Schedule for later (optional)">
       <button class="btn btn-accent" onclick="addTask()">Add Task</button>
     </div>
   </div>

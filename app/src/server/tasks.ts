@@ -105,6 +105,7 @@ export class TaskManager {
       const trimmed = line.trim();
 
       if (trimmed === '## Planned') { currentStatus = 'planned'; continue; }
+      if (trimmed === '## Scheduled') { currentStatus = 'scheduled'; continue; }
       if (trimmed === '## Active') { currentStatus = 'active'; continue; }
       if (trimmed === '## Done') { currentStatus = 'done'; continue; }
       if (trimmed === '## Failed') { currentStatus = 'failed'; continue; }
@@ -125,6 +126,7 @@ export class TaskManager {
       const priorityMatch = metaPart.match(/\[(low|medium|high|critical)\]/i);
       const budgetMatch = metaPart.match(/\[\$([0-9.]+)\]/);
       const actualCostMatch = metaPart.match(/\[\$([0-9.]+) actual\]/);
+      const scheduledMatch = metaPart.match(/\[@([^\]]+)\]/);
 
       // Title is everything before the first bracket in the meta part
       const titleEnd = metaPart.search(/\s*\[/);
@@ -150,6 +152,7 @@ export class TaskManager {
           totalUsd: actualCostMatch ? parseFloat(actualCostMatch[1]) : 0,
         },
         notes: notesPart,
+        scheduledFor: scheduledMatch ? scheduledMatch[1] : undefined,
       };
 
       const retryMatch = task.notes.match(/Retry limit reached \((\d+)\/(\d+)\)/);
@@ -165,7 +168,7 @@ export class TaskManager {
   }
 
   private renderTasksMd(): string {
-    const sections: Record<TaskStatus, Task[]> = { planned: [], active: [], done: [], failed: [], pulled: [] };
+    const sections: Record<TaskStatus, Task[]> = { planned: [], scheduled: [], active: [], done: [], failed: [], pulled: [] };
     for (const task of this.tasks) {
       sections[task.status].push(task);
     }
@@ -174,6 +177,7 @@ export class TaskManager {
 
     for (const [status, label] of [
       ['planned', 'Planned'],
+      ['scheduled', 'Scheduled'],
       ['active', 'Active'],
       ['done', 'Done'],
       ['failed', 'Failed'],
@@ -185,8 +189,11 @@ export class TaskManager {
         md += '_No tasks_\n';
       } else {
         for (const t of statusTasks) {
-          const marker = status === 'done' ? 'x' : status === 'active' ? '~' : status === 'failed' ? '!' : status === 'pulled' ? '-' : ' ';
+          const marker = status === 'done' ? 'x' : status === 'active' ? '~' : status === 'failed' ? '!' : status === 'pulled' ? '-' : status === 'scheduled' ? '@' : ' ';
           let line = `- [${marker}] \`${t.id}\` ${t.title} [${t.model}] [${t.priority}] [$${t.maxBudgetUsd.toFixed(2)}]`;
+          if (t.scheduledFor) {
+            line += ` [@${t.scheduledFor}]`;
+          }
           if (status === 'done' && t.tokenCost.totalUsd > 0) {
             line += ` [$${t.tokenCost.totalUsd.toFixed(2)} actual]`;
           }
@@ -211,6 +218,7 @@ export class TaskManager {
     maxBudgetUsd?: number;
     tags?: string[];
     parentGoal?: string;
+    scheduledFor?: string;
   }): Promise<Task> {
     return this.serialise(() => {
       const id = `task-${String(this.nextId()).padStart(3, '0')}`;
@@ -231,7 +239,12 @@ export class TaskManager {
         tokenCost: { input: 0, output: 0, totalUsd: 0 },
         notes: '',
         parentGoal: params.parentGoal,
+        scheduledFor: params.scheduledFor,
       };
+      // If scheduledFor is set, put in scheduled status instead of planned
+      if (params.scheduledFor) {
+        task.status = 'scheduled';
+      }
       this.tasks.push(task);
       this.audit('ceo', 'create_task', task.id, `Created: ${task.title}`);
       this.logger.info({ taskId: task.id, title: task.title }, 'Task created');
@@ -279,13 +292,36 @@ export class TaskManager {
   }
 
   getStatusCounts(): Record<TaskStatus, number> {
-    const counts: Record<TaskStatus, number> = { planned: 0, active: 0, done: 0, failed: 0, pulled: 0 };
+    const counts: Record<TaskStatus, number> = { planned: 0, scheduled: 0, active: 0, done: 0, failed: 0, pulled: 0 };
     for (const t of this.tasks) counts[t.status]++;
     return counts;
   }
 
   getPlannedCount(): number {
     return this.tasks.filter((t) => t.status === 'planned').length;
+  }
+
+  // ─── Scheduled Task Activation ───
+
+  async activateDueTasks(): Promise<number> {
+    return this.serialise(() => {
+      const now = Date.now();
+      let activated = 0;
+      for (const task of this.tasks) {
+        if (task.status === 'scheduled' && task.scheduledFor) {
+          const scheduledTime = new Date(task.scheduledFor).getTime();
+          if (!isNaN(scheduledTime) && scheduledTime <= now) {
+            task.status = 'planned';
+            task.notes = (task.notes ? task.notes + ' | ' : '') + `Activated from schedule (was ${task.scheduledFor})`;
+            task.scheduledFor = undefined;
+            this.audit('system', 'schedule_activate', task.id, `Scheduled task activated: ${task.title}`);
+            this.logger.info({ taskId: task.id, title: task.title }, 'Scheduled task activated');
+            activated++;
+          }
+        }
+      }
+      return activated;
+    });
   }
 
   // ─── Orphan Cleanup ───

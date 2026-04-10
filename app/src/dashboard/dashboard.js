@@ -128,10 +128,11 @@ function handleTerminalOutput(agentId, data) {
 function createWorkerTerminal(agentId) {
   const container = document.createElement('div');
   container.id = `terminal-${agentId}`;
-  container.style.height = '100%';
-  container.style.width = '100%';
   container.style.position = 'absolute';
-  container.style.inset = '0';
+  container.style.top = '4px';
+  container.style.bottom = '0';
+  container.style.left = '20px';
+  container.style.right = '20px';
   // Temporarily visible for fit measurement
   document.querySelector('.terminal-main').appendChild(container);
 
@@ -206,12 +207,12 @@ function renderTasks(state) {
   const container = document.getElementById('tasks-container');
   if (!state || !state.tasks) return;
 
-  const sections = { planned: [], active: [], done: [], failed: [], pulled: [] };
+  const sections = { planned: [], scheduled: [], active: [], done: [], failed: [], pulled: [] };
   state.tasks.forEach(t => sections[t.status]?.push(t));
 
-  const labels = { planned: 'Planned', active: 'Active', done: 'Done', failed: 'Failed', pulled: 'Pulled' };
-  const checkmarks = { planned: '[ ]', active: '[~]', done: '[x]', failed: '[!]', pulled: '[-]' };
-  const checkClass = { planned: '', active: 'active', done: 'done', failed: 'failed', pulled: 'pulled' };
+  const labels = { planned: 'Planned', scheduled: 'Scheduled', active: 'Active', done: 'Done', failed: 'Failed', pulled: 'Pulled' };
+  const checkmarks = { planned: '[ ]', scheduled: '[@]', active: '[~]', done: '[x]', failed: '[!]', pulled: '[-]' };
+  const checkClass = { planned: '', scheduled: 'scheduled', active: 'active', done: 'done', failed: 'failed', pulled: 'pulled' };
 
   let html = '';
   for (const [status, tasks] of Object.entries(sections)) {
@@ -234,6 +235,7 @@ function renderTasks(state) {
                 <span class="task-tag ${priorityClass}">${escapeHtml(t.priority)}</span>
                 <span class="task-tag">$${(t.maxBudgetUsd ?? 0).toFixed(2)}</span>
                 ${t.tokenCost?.totalUsd > 0 ? `<span class="task-tag" style="color: var(--green);">$${t.tokenCost.totalUsd.toFixed(2)} actual</span>` : ''}
+                ${t.scheduledFor ? `<span class="task-tag" style="color: var(--blue);">@ ${new Date(t.scheduledFor).toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>` : ''}
                 ${t.notes ? `<span style="color: var(--text-muted);">${escapeHtml(t.notes)}</span>` : ''}
               </div>
             </div>
@@ -264,16 +266,23 @@ function renderTasks(state) {
 
 async function addTask() {
   const input = document.getElementById('add-task-input');
+  const scheduleInput = document.getElementById('add-task-schedule');
   const title = input.value.trim();
   if (!title) return;
+
+  const body = { title };
+  if (scheduleInput.value) {
+    body.scheduledFor = new Date(scheduleInput.value).toISOString();
+  }
 
   await fetch('/api/tasks', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(body),
   });
 
   input.value = '';
+  scheduleInput.value = '';
 }
 
 async function retryTask(id) {
@@ -599,10 +608,10 @@ async function sendPrompt() {
 
   const text = message || '(see attached images)';
 
-  // Echo in terminal
+  // Echo in terminal — extra blank line for separation from CEO response
   if (ceoTerminal) {
     const lines = text.split('\n').map(l => l.replace(/\r/g, ''));
-    ceoTerminal.write(`\r\n\x1b[1;36m> You:\x1b[0m ${lines[0]}\r\n`);
+    ceoTerminal.write(`\r\n\r\n\x1b[1;36m> You:\x1b[0m ${lines[0]}\r\n`);
     for (let i = 1; i < lines.length; i++) {
       ceoTerminal.write(`\x1b[1;36m  |\x1b[0m ${lines[i]}\r\n`);
     }

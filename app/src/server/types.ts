@@ -1,6 +1,6 @@
 // ─── Task Types ───
 
-export type TaskStatus = 'planned' | 'active' | 'done' | 'failed' | 'pulled';
+export type TaskStatus = 'planned' | 'scheduled' | 'active' | 'done' | 'failed' | 'pulled';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'critical';
 export type ModelChoice = 'opus' | 'sonnet' | 'haiku';
 
@@ -21,6 +21,7 @@ export interface Task {
   tokenCost: { input: number; output: number; totalUsd: number };
   notes: string;
   parentGoal?: string;
+  scheduledFor?: string; // ISO datetime — task moves to planned when time arrives
 }
 
 export interface TasksState {
