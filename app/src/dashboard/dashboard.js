@@ -111,12 +111,22 @@ function initTerminals() {
   });
 }
 
+let ceoOutputTimer = null;
+
 function handleTerminalOutput(agentId, data) {
   // xterm.js needs \r\n — bare \n moves cursor down without returning to column 0
   const normalized = typeof data === 'string' ? data.replace(/\r?\n/g, '\r\n') : data;
 
   if (!agentId || agentId === 'ceo') {
-    if (ceoTerminal) ceoTerminal.write(normalized);
+    if (ceoTerminal) {
+      ceoTerminal.write(normalized);
+      // Timestamp after CEO stops sending for 2 seconds
+      if (ceoOutputTimer) clearTimeout(ceoOutputTimer);
+      ceoOutputTimer = setTimeout(() => {
+        ceoTerminal.write(`\r\n\x1b[90m${timeStamp()}\x1b[0m\r\n`);
+        ceoOutputTimer = null;
+      }, 2000);
+    }
   } else {
     if (!workerTerminals[agentId]) {
       createWorkerTerminal(agentId);
@@ -615,6 +625,7 @@ async function sendPrompt() {
 
   // Echo in terminal — extra blank line for separation from CEO response
   if (ceoTerminal) {
+    const ts = timeStamp();
     const lines = text.split('\n').map(l => l.replace(/\r/g, ''));
     ceoTerminal.write(`\r\n\r\n\x1b[1;36m> You:\x1b[0m ${lines[0]}\r\n`);
     for (let i = 1; i < lines.length; i++) {
@@ -623,7 +634,7 @@ async function sendPrompt() {
     if (pendingImages.length > 0) {
       ceoTerminal.write(`\x1b[1;36m  |\x1b[0m \x1b[90m[${pendingImages.length} image${pendingImages.length > 1 ? 's' : ''} attached]\x1b[0m\r\n`);
     }
-    ceoTerminal.write('\r\n');
+    ceoTerminal.write(`\x1b[90m${ts}\x1b[0m\r\n`);
   }
 
   const body = { message: text };
@@ -823,6 +834,11 @@ function hideBanner() {
 }
 
 // ─── Helpers ───
+
+function timeStamp() {
+  const now = new Date();
+  return now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
 
 function escapeHtml(str) {
   const div = document.createElement('div');
