@@ -125,6 +125,16 @@ You watch it all live in a dashboard with live terminals, task tracking, and cos
 
 ---
 
+## Built for humans, not just agents
+
+Most agent tools treat the UI as an afterthought - a log viewer bolted onto an API. We think the interface is the product. If you're trusting AI to manage your codebase, you need to see what it's doing, intervene naturally, and never feel like you're fighting the tool.
+
+That's why Eunomia has native voice input (no external service - Web Speech API runs locally), image attachments via drag-and-drop (paste a screenshot of a bug, the CEO sees it), multi-line prompts with Shift+Enter, message timestamps so you can track the conversation flow, a sleep screen with a one-click copy restart command, and live settings you can adjust without touching a config file.
+
+Every interaction was designed around one question: what would make this feel like a tool you actually want open all day?
+
+---
+
 ## Safety
 
 Thirteen guardrails. All SDK-enforced. Not prompt-based suggestions.
