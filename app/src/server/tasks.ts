@@ -219,6 +219,7 @@ export class TaskManager {
     tags?: string[];
     parentGoal?: string;
     scheduledFor?: string;
+    dependsOn?: string[];
   }): Promise<Task> {
     return this.serialise(() => {
       const id = `task-${String(this.nextId()).padStart(3, '0')}`;
@@ -240,6 +241,7 @@ export class TaskManager {
         notes: '',
         parentGoal: params.parentGoal,
         scheduledFor: params.scheduledFor,
+        dependsOn: params.dependsOn,
       };
       // If scheduledFor is set, put in scheduled status instead of planned
       if (params.scheduledFor) {

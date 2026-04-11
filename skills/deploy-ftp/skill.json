@@ -1,0 +1,15 @@
+{
+  "name": "Deploy FTP",
+  "description": "Build the project and deploy to a remote server via FTP",
+  "mode": "ceo",
+  "workerModel": "sonnet",
+  "output": "reports/deploy-ftp-{date}.md",
+  "configFields": [
+    { "name": "host", "label": "FTP Host", "type": "string", "required": true },
+    { "name": "user", "label": "FTP User", "type": "string", "required": true },
+    { "name": "password", "label": "FTP Password", "type": "string", "required": true },
+    { "name": "remotePath", "label": "Remote Path (e.g. /public_html)", "type": "string", "required": true },
+    { "name": "buildCmd", "label": "Build Command (e.g. npm run build)", "type": "string", "required": true },
+    { "name": "outputDir", "label": "Build Output Dir (e.g. out, dist, build)", "type": "string", "required": true }
+  ]
+}

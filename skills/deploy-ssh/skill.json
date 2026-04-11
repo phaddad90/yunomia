@@ -1,0 +1,14 @@
+{
+  "name": "Deploy SSH",
+  "description": "Build the project and deploy to a remote server via SSH/SCP",
+  "mode": "ceo",
+  "workerModel": "sonnet",
+  "output": "reports/deploy-ssh-{date}.md",
+  "configFields": [
+    { "name": "host", "label": "SSH Host", "type": "string", "required": true },
+    { "name": "user", "label": "SSH User", "type": "string", "required": true },
+    { "name": "remotePath", "label": "Remote Path (e.g. /var/www/site)", "type": "string", "required": true },
+    { "name": "buildCmd", "label": "Build Command (e.g. npm run build)", "type": "string", "required": true },
+    { "name": "outputDir", "label": "Build Output Dir (e.g. out, dist, build)", "type": "string", "required": true }
+  ]
+}

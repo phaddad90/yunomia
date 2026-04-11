@@ -112,6 +112,7 @@ export class McpServer {
             model: { type: 'string', enum: ['opus', 'sonnet', 'haiku'], description: 'Model for the worker' },
             priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
             maxBudgetUsd: { type: 'number', description: 'Max budget in USD for this task' },
+            dependsOn: { type: 'array', items: { type: 'string' }, description: 'Task IDs that must complete before this task can be spawned' },
           },
           required: ['title'],
         },
@@ -243,6 +244,7 @@ export class McpServer {
       model: (input.model as ModelChoice) || 'sonnet',
       priority: (input.priority as TaskPriority) || 'medium',
       maxBudgetUsd: (input.maxBudgetUsd as number) || 2.0,
+      dependsOn: (input.dependsOn as string[]) || undefined,
     });
 
     this.heartbeat.notifyTaskChange();
@@ -276,6 +278,17 @@ export class McpServer {
       return this.error(`Task ${taskId} is ${task.status}, not planned. Cannot spawn worker.`);
     }
 
+    // Check dependencies
+    if (task.dependsOn && task.dependsOn.length > 0) {
+      const unmet = task.dependsOn.filter(depId => {
+        const dep = this.tasks.getTask(depId);
+        return !dep || dep.status !== 'done';
+      });
+      if (unmet.length > 0) {
+        return this.error(`Task ${taskId} has unmet dependencies: ${unmet.join(', ')}. Complete them first.`);
+      }
+    }
+
     // Safety check
     const activeCount = this.adapter.getActiveWorkerCount();
     const check = this.safety.canSpawnWorker(activeCount, task);
@@ -303,7 +316,27 @@ export class McpServer {
     // Create worker directory
     const workerDir = join(this.projectPath, 'workers', taskId);
     const outputDir = join(workerDir, 'output');
+    const inputDir = join(workerDir, 'input');
     mkdirSync(outputDir, { recursive: true });
+
+    // Worker-to-worker file handoff: copy dependency outputs into input/
+    if (task.dependsOn && task.dependsOn.length > 0) {
+      mkdirSync(inputDir, { recursive: true });
+      for (const depId of task.dependsOn) {
+        const depOutputDir = join(this.projectPath, 'workers', depId, 'output');
+        if (existsSync(depOutputDir)) {
+          try {
+            const files = require('fs').readdirSync(depOutputDir) as string[];
+            for (const file of files) {
+              const src = join(depOutputDir, file);
+              const dest = join(inputDir, `${depId}-${file}`);
+              require('fs').copyFileSync(src, dest);
+            }
+            this.logger.info({ taskId, depId, files: files.length }, 'Copied dependency output to worker input');
+          } catch { /* ignore copy errors */ }
+        }
+      }
+    }
 
     // Sanitize task content for SOUL.md (prevent heading injection / stuffing)
     const sanitizedTitle = (task.title || '').slice(0, 200).replace(/[#\n]/g, ' ');
@@ -336,12 +369,14 @@ ${sanitizedDesc}
 1. Read the project files at ${this.projectPath} to understand the codebase
 2. Do the work described above
 3. Write ALL output files to the output/ directory in YOUR working folder
-4. If you get stuck, write what you have so far and stop - partial output is better than none
-5. Do NOT write files outside your working directory
+4. You CAN use Bash for commands like npm, npx, cat, ls, grep - your working dir is your sandbox
+5. If you get stuck, write what you have so far and stop - partial output is better than none
+6. Do NOT write files outside your working directory
 
 ## Constraints
-- You CANNOT use the Bash tool
+- You CAN use Bash (sandboxed to your working directory)
 - You CANNOT write files outside your working directory (output/ only)
+- If there is an input/ directory, it contains output from prerequisite tasks - use it as context
 - Budget: $${task.maxBudgetUsd}
 ${projectContext}
 `;

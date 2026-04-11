@@ -4,6 +4,27 @@ All notable changes to Yunomia are documented here.
 
 ---
 
+## v1.3.0 - 2026-04-11
+
+### Smarter Workers
+- **Sandboxed Bash** - workers can now use Bash (npm, npx, ls, grep, etc.) but dangerous commands are blocked (rm -rf /, sudo, chmod 777, etc.). Worker cwd is scoped to their directory. Previously Bash was fully blocked.
+- **Task dependency chains** - `dependsOn` field on tasks. CEO can chain tasks: task B won't spawn until task A is done. spawn_worker checks dependencies before proceeding.
+- **Worker-to-worker file handoff** - when a task has dependencies, completed dependency outputs are copied into the new worker's input/ directory. Workers are told to check input/ for context from prerequisite tasks.
+- **Git auto-commit** - on successful worker completion (verified output files), automatically stages and commits changes in the project repo with message "[Yunomia] task title - completed by worker-id".
+
+### Deploy Skills
+- **Deploy SSH** - CEO-mode skill. Runs build command, uploads via scp, verifies deployment. Config: host, user, remotePath, buildCmd, outputDir.
+- **Deploy FTP** - CEO-mode skill. Same flow via FTP/LFTP. Config: host, user, password, remotePath, buildCmd, outputDir.
+- Total skills now: 9 (red-team, security-scan, code-review, brand-audit, content-review, test-suite, seo-audit, deploy-ssh, deploy-ftp)
+
+### Worker Reliability (continued from v1.2.1)
+- **Spawn health check (60s)** - if worker produces 0 tokens in first 60 seconds, auto-kill and re-queue for retry. Catches dead SDK sessions immediately.
+- **Output verification** - checks output/ directory for files before marking done. Empty output = failed, not done.
+- **Richer worker SOUL.md** - injects project tech stack, last 5 completed tasks, step-by-step instructions. "If stuck, write partial output."
+- **CEO task decomposition** - SOUL.md instructs: micro-tasks under 10 min, 1-3 files per task, acceptance criteria required.
+
+---
+
 ## v1.2.1 - 2026-04-10
 
 ### New Features

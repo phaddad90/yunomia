@@ -23,6 +23,7 @@ export interface Task {
   parentGoal?: string;
   scheduledFor?: string; // ISO datetime - task moves to planned when time arrives
   maxRuntimeMinutes?: number; // per-task timeout override
+  dependsOn?: string[]; // task IDs that must be done before this can be spawned
 }
 
 export interface TasksState {

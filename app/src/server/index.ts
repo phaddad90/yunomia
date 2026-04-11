@@ -908,7 +908,24 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
       });
       heartbeat.notifyTaskChange();
       broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
-      logger.info({ taskId, agentId, cost: info.costUsd.toFixed(2) }, 'Worker completed naturally - task marked done');
+      logger.info({ taskId, agentId, cost: info.costUsd.toFixed(2), hasOutput }, `Worker completed - ${status}`);
+
+      // Git auto-commit on successful completion
+      if (hasOutput) {
+        try {
+          const { execSync } = require('child_process') as typeof import('child_process');
+          // Check if project is a git repo
+          execSync('git rev-parse --git-dir', { cwd: config.projectPath, stdio: 'ignore' });
+          // Stage and commit worker output
+          execSync(`git add -A`, { cwd: config.projectPath, stdio: 'ignore' });
+          const taskObj = tasks.getTask(taskId);
+          const msg = `[Yunomia] ${taskObj?.title || taskId} - completed by ${agentId}`;
+          execSync(`git commit -m "${msg.replace(/"/g, '\\"')}" --allow-empty`, { cwd: config.projectPath, stdio: 'ignore' });
+          logger.info({ taskId }, 'Git auto-commit after worker completion');
+        } catch {
+          // Not a git repo or commit failed - non-fatal
+        }
+      }
     }
   });
 
@@ -1361,12 +1378,13 @@ function buildSdkMcpTools(mcp: McpServer, z: typeof import('zod').z, toolFn: (..
       status: z.enum(['planned', 'active', 'done', 'failed']).optional(),
     }, async (args) => mcp.handleToolCall('tasks_list', args)),
 
-    tool('tasks_create', 'Create a new task in Planned status', {
+    tool('tasks_create', 'Create a new task in Planned status. Use dependsOn to chain tasks.', {
       title: z.string(),
       description: z.string().optional(),
       model: z.enum(['opus', 'sonnet', 'haiku']).optional(),
       priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
       maxBudgetUsd: z.number().optional(),
+      dependsOn: z.array(z.string()).optional(),
     }, async (args) => mcp.handleToolCall('tasks_create', args)),
 
     tool('tasks_update', 'Update a task status, notes, priority, or model', {

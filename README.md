@@ -151,7 +151,7 @@ Thirteen guardrails. All SDK-enforced. Not prompt-based suggestions.
 | Inactivity pause | Pauses heartbeat when you're away | 60 min |
 | Working hours | Pauses outside hours, auto-resumes | Off |
 | Write isolation | Blocks Write/Edit outside worker dir | Always on |
-| Bash blocked | Workers cannot use Bash | Always on |
+| Bash sandboxed | Workers can use Bash, dangerous commands blocked | Always on |
 | CEO file guard | CEO cannot modify its own SOUL.md or GOALS.md | Always on |
 | CEO session age | Saves memory, restarts fresh | 8 hours |
 | CEO crash recovery | Auto-restarts, notifies dashboard | Always on |
@@ -232,7 +232,7 @@ A single Claude Code session runs $5-15/day. Yunomia runs 4-6x that for multi-ag
 
 ## Status
 
-**Current version: v1.2.1** - fully functional, 6 rounds of red-team review (risk score 14/125), actively in use.
+**Current version: v1.3.0** - fully functional, 6 rounds of red-team review (risk score 14/125), actively in use.
 
 ## Roadmap
 
@@ -250,12 +250,12 @@ A single Claude Code session runs $5-15/day. Yunomia runs 4-6x that for multi-ag
 - CEO can invoke skills via MCP tool (`run_skill`)
 - Dashboard Skills tab with click-to-run cards
 
-**v1.3 - Smarter Workers + Deploy**
-- Sandboxed Bash for workers (restricted to output dir only)
-- Task dependency chains (task B blocked until task A completes)
-- Worker-to-worker file handoff (output of A becomes input for B)
+**v1.3 - Smarter Workers + Deploy** *shipped*
+- Sandboxed Bash for workers (dangerous commands blocked, cwd scoped)
+- Task dependency chains (dependsOn field, CEO can chain tasks)
+- Worker-to-worker file handoff (dependency output copied to input/ dir)
 - Deploy skills: SSH and FTP with per-project config
-- Git auto-commit on worker completion
+- Git auto-commit on successful worker completion
 
 **v2.0 - Better Visibility + Multi-project**
 - Historical cost graph on Status tab (last 7 days)

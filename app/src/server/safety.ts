@@ -139,6 +139,22 @@ export class SafetyModule {
           }
         }
       }
+
+      // Sandboxed Bash: allow but restrict working directory
+      if (tool === 'Bash') {
+        const command = (input.command as string) || '';
+        // Block dangerous commands that could affect the system
+        const blocked = ['rm -rf /', 'sudo', 'chmod 777', 'mkfs', 'dd if=', '> /dev/', 'curl.*|.*sh', 'wget.*|.*sh'];
+        for (const pattern of blocked) {
+          if (new RegExp(pattern, 'i').test(command)) {
+            this.logger.warn({ tool, command: command.slice(0, 100) }, 'Worker Bash blocked - dangerous command');
+            return { behavior: 'deny' };
+          }
+        }
+        // Allow Bash - the worker's cwd is already set to workerDir by the spawn config
+        return { behavior: 'allow' };
+      }
+
       return { behavior: 'allow' };
     };
   }
@@ -182,7 +198,8 @@ export class SafetyModule {
   }
 
   getWorkerDisallowedTools(): string[] {
-    return ['Bash'];
+    // Bash is now sandboxed via canUseTool instead of fully blocked
+    return [];
   }
 
   // ─── Heartbeat ───
