@@ -63,6 +63,9 @@ export class AgentAdapter {
   private sdkLoaded = false;
   private onCostUpdate?: (agentId: string, costUsd: number, tokensInput: number, tokensOutput: number) => void;
   private onWorkerCompleted?: (agentId: string, taskId: string | undefined, info: SessionInfo) => Promise<void> | void;
+  private onWorkerStalled?: (agentId: string, taskId: string | undefined, reason: string) => void;
+  private firstTokenTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private hasProducedOutput = new Set<string>();
 
   constructor(logger: Logger) {
     this.logger = logger;
@@ -87,6 +90,10 @@ export class AgentAdapter {
 
   setOnWorkerCompleted(cb: (agentId: string, taskId: string | undefined, info: SessionInfo) => Promise<void> | void): void {
     this.onWorkerCompleted = cb;
+  }
+
+  setOnWorkerStalled(cb: (agentId: string, taskId: string | undefined, reason: string) => void): void {
+    this.onWorkerStalled = cb;
   }
 
   // ─── Spawn ───
@@ -140,6 +147,21 @@ export class AgentAdapter {
     // Real SDK session
     session.status = 'running';
     session.info.status = 'running';
+
+    // First-token health check for workers: if no output in 60s, flag as stalled
+    if (role === 'worker') {
+      const timer = setTimeout(() => {
+        if (!this.hasProducedOutput.has(id) && session.status === 'running') {
+          this.logger.warn({ agentId: id }, 'Worker produced no tokens in 60s - stalled on spawn');
+          if (this.onWorkerStalled) {
+            this.onWorkerStalled(id, taskId, 'no tokens in first 60 seconds');
+          }
+        }
+        this.firstTokenTimers.delete(id);
+      }, 60 * 1000);
+      this.firstTokenTimers.set(id, timer);
+    }
+
     this.runSdkSession(session, config, onOutput).catch((err) => {
       if (session.status === 'running') {
         session.status = 'crashed';
@@ -269,6 +291,9 @@ export class AgentAdapter {
         this.messageQueues.delete(session.id);
         this.messageResolvers.delete(session.id);
         this.queryHandles.delete(session.id);
+        this.hasProducedOutput.delete(session.id);
+        const ft = this.firstTokenTimers.get(session.id);
+        if (ft) { clearTimeout(ft); this.firstTokenTimers.delete(session.id); }
         this.sessions.delete(session.id);
       }
     } catch (err) {
@@ -300,6 +325,12 @@ export class AgentAdapter {
       if (event?.type === 'content_block_delta') {
         const delta = event.delta as Record<string, unknown>;
         if (delta?.type === 'text_delta' && delta.text) {
+          // Mark first output - clears the spawn health timer
+          if (!this.hasProducedOutput.has(session.id)) {
+            this.hasProducedOutput.add(session.id);
+            const timer = this.firstTokenTimers.get(session.id);
+            if (timer) { clearTimeout(timer); this.firstTokenTimers.delete(session.id); }
+          }
           if (onOutput) onOutput(delta.text as string);
         }
       }
@@ -308,6 +339,11 @@ export class AgentAdapter {
     if (type === 'assistant') {
       const content = message.content as string;
       if (content && onOutput) {
+        if (!this.hasProducedOutput.has(session.id)) {
+          this.hasProducedOutput.add(session.id);
+          const timer = this.firstTokenTimers.get(session.id);
+          if (timer) { clearTimeout(timer); this.firstTokenTimers.delete(session.id); }
+        }
         onOutput(content + '\r\n');
       }
     }
@@ -394,6 +430,9 @@ export class AgentAdapter {
     // Cleanup
     this.outputCallbacks.delete(agentId);
     this.messageQueues.delete(agentId);
+    this.hasProducedOutput.delete(agentId);
+    const ftt = this.firstTokenTimers.get(agentId);
+    if (ftt) { clearTimeout(ftt); this.firstTokenTimers.delete(agentId); }
     this.sessions.delete(agentId);
     this.logger.info({ agentId }, 'Agent killed');
   }

@@ -169,6 +169,14 @@ ${discoveredContext}
 - Only ask the human when you genuinely lack information they haven't provided (e.g. credentials, preferences not in PROJECT.md).
 - "What do you want to do?" is not an acceptable response. Decide, act, report what you did.
 
+## Task Design
+- Break work into micro-tasks a single worker can complete in under 10 minutes.
+- Each task should produce 1-3 files maximum. If it needs more, split it.
+- Always include acceptance criteria in the task description: what files should exist when done.
+- Specify the output format: "Write Nav.tsx to output/Nav.tsx" not just "build the nav".
+- If a worker stalls or produces no output, try a simpler task scope before retrying the same one.
+- Use haiku for trivial edits, sonnet for new code, opus only for complex architecture.
+
 ## Personality
 Direct, no fluff. Lead with the decision, then the reasoning.
 `,
@@ -835,13 +843,58 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
     logger.info({ agentId, costUsd: costUsd.toFixed(4), delta: delta.toFixed(4), tokensInput, tokensOutput }, 'Cost update');
   });
 
-  // Worker natural completion - update task with cost data
+  // Worker spawn stall detection - kill and retry if no tokens in 60s
+  adapter.setOnWorkerStalled(async (agentId, taskId, reason) => {
+    logger.warn({ agentId, taskId, reason }, 'Worker stalled on spawn - killing');
+    await adapter.killSession(agentId);
+
+    if (taskId) {
+      const task = tasks.getTask(taskId);
+      const retryCount = (task?.retryCount ?? 0) + 1;
+
+      if (retryCount <= (task?.maxRetries ?? 2)) {
+        // Retry: put back to planned
+        await tasks.updateTask(taskId, {
+          status: 'planned',
+          assignee: null,
+          notes: `Spawn stall #${retryCount} - auto-retrying`,
+          retryCount,
+        });
+        logger.info({ taskId, retryCount }, 'Task re-queued after spawn stall');
+      } else {
+        await tasks.updateTask(taskId, {
+          status: 'failed',
+          notes: `Failed after ${retryCount} spawn stalls - needs human review`,
+          retryCount,
+        });
+      }
+      heartbeat.notifyTaskChange();
+      broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
+    }
+  });
+
+  // Worker natural completion - verify output, then update task
   adapter.setOnWorkerCompleted(async (agentId, taskId, info) => {
     if (taskId) {
+      // Verify output directory has files
+      const outputDir = join(config.projectPath, 'workers', taskId, 'output');
+      let hasOutput = false;
+      try {
+        if (existsSync(outputDir)) {
+          const files = readdirSync(outputDir);
+          hasOutput = files.length > 0;
+        }
+      } catch { /* ignore */ }
+
+      const status = hasOutput ? 'done' : 'failed';
+      const notes = hasOutput
+        ? `Completed in ${Math.round(info.runtime / 60000)}m, $${info.costUsd.toFixed(2)}, ${readdirSync(outputDir).length} files`
+        : `Worker finished but produced no output files ($${info.costUsd.toFixed(2)})`;
+
       await tasks.updateTask(taskId, {
-        status: 'done',
+        status,
         tokenCost: { input: info.tokensInput, output: info.tokensOutput, totalUsd: info.costUsd },
-        notes: `Completed in ${Math.round(info.runtime / 60000)}m, $${info.costUsd.toFixed(2)}`,
+        notes,
       });
       metrics.record('worker_completed', {
         taskId,
@@ -851,7 +904,7 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
         tokensInput: info.tokensInput,
         tokensOutput: info.tokensOutput,
         costUsd: info.costUsd,
-        success: true,
+        success: hasOutput,
       });
       heartbeat.notifyTaskChange();
       broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });

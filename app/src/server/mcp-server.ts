@@ -6,7 +6,7 @@ import type { MetricsCollector } from './metrics.js';
 import type { ModelChoice, TaskPriority } from './types.js';
 import type { Logger } from 'pino';
 import { join } from 'path';
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { listSkills, runSkill } from './skills.js';
 
 /**
@@ -309,25 +309,41 @@ export class McpServer {
     const sanitizedTitle = (task.title || '').slice(0, 200).replace(/[#\n]/g, ' ');
     const sanitizedDesc = (task.description || '').slice(0, 500).replace(/[#]/g, '');
 
-    // Write worker SOUL.md
+    // Build project context for the worker
+    let projectContext = '';
+    try {
+      const pkgPath = join(this.projectPath, 'package.json');
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+        projectContext += `\n## Project: ${pkg.name || 'unknown'}\nTech: ${Object.keys(pkg.dependencies || {}).slice(0, 8).join(', ')}`;
+      }
+    } catch { /* ignore */ }
+
+    // Include recent done tasks so worker knows what's already built
+    const doneTasks = this.tasks.listTasks({ status: 'done' }).slice(-5);
+    if (doneTasks.length > 0) {
+      projectContext += '\n\n## Already Completed\n' + doneTasks.map(t => `- ${t.title}`).join('\n');
+    }
+
+    // Write worker SOUL.md with enriched context
     const soulContent = `# SOUL - Worker for ${sanitizedTitle}
 
 ## Task
 ${sanitizedTitle}
 ${sanitizedDesc}
 
-## Rules
-- Write ALL output to the output/ directory in your working folder
-- You have read access to the project folder for context
+## How to Work
+1. Read the project files at ${this.projectPath} to understand the codebase
+2. Do the work described above
+3. Write ALL output files to the output/ directory in YOUR working folder
+4. If you get stuck, write what you have so far and stop - partial output is better than none
+5. Do NOT write files outside your working directory
+
+## Constraints
 - You CANNOT use the Bash tool
-- You CANNOT write files outside your working directory
-- Complete the task, then stop
-
-## Model
-${task.model}
-
-## Budget
-$${task.maxBudgetUsd}
+- You CANNOT write files outside your working directory (output/ only)
+- Budget: $${task.maxBudgetUsd}
+${projectContext}
 `;
     writeFileSync(join(workerDir, 'SOUL.md'), soulContent);
 
