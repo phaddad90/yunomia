@@ -44,7 +44,7 @@
   </div>
 
   <!-- Banner -->
-  <div id="banner" class="banner"></div>
+  <div id="banner" class="banner" role="alert" aria-live="polite"></div>
 
   <!-- Header -->
   <div class="header">
@@ -61,11 +61,11 @@
   </div>
 
   <!-- Tabs -->
-  <div class="tabs">
-    <div class="tab active" data-tab="terminals" onclick="switchTab('terminals')">Terminals</div>
-    <div class="tab" data-tab="tasks" onclick="switchTab('tasks')">Tasks</div>
-    <div class="tab" data-tab="skills" onclick="switchTab('skills')">Skills</div>
-    <div class="tab" data-tab="status" onclick="switchTab('status')">Status</div>
+  <div class="tabs" role="tablist">
+    <div class="tab active" role="tab" tabindex="0" aria-selected="true" data-tab="terminals" onclick="switchTab('terminals')" onkeydown="if(event.key==='Enter')switchTab('terminals')">Terminals</div>
+    <div class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="tasks" onclick="switchTab('tasks')" onkeydown="if(event.key==='Enter')switchTab('tasks')">Tasks</div>
+    <div class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="skills" onclick="switchTab('skills')" onkeydown="if(event.key==='Enter')switchTab('skills')">Skills</div>
+    <div class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="status" onclick="switchTab('status')" onkeydown="if(event.key==='Enter')switchTab('status')">Status</div>
   </div>
 
   <!-- Tab: Terminals -->

@@ -298,6 +298,19 @@ export class AgentAdapter {
         // Note: nudgedWorkers is in index.ts - cleaned up via onWorkerCompleted callback
       }
     } catch (err) {
+      // Check for rate limit errors - retry with backoff
+      const errStr = String(err);
+      const isRateLimit = errStr.includes('429') || errStr.includes('529') || errStr.includes('rate') || errStr.includes('overloaded');
+      if (isRateLimit && session.status === 'running') {
+        this.logger.warn({ agentId: session.id }, 'Rate limited - retrying in 30s');
+        if (onOutput) onOutput(`\r\n[Yunomia] Rate limited. Retrying in 30 seconds...\r\n`);
+        await new Promise(r => setTimeout(r, 30000));
+        if (session.status === 'running') {
+          // Retry once
+          return this.runSdkSession(session, config, onOutput);
+        }
+      }
+
       if (session.status === 'running') {
         session.status = 'crashed';
         session.info.status = 'crashed';

@@ -1,4 +1,5 @@
 import { resolve, sep, join } from 'path';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import type { SafetyConfig, AgentSession, Task } from './types.js';
 import type { Logger } from 'pino';
 
@@ -11,10 +12,39 @@ export class SafetyModule {
   private paused = false;
   private pendingApprovals = new Map<string, { task: Task; resolve: (approved: boolean) => void; timer: ReturnType<typeof setTimeout> }>();
   private onDayReset?: () => void;
+  private projectPath?: string;
 
   constructor(config: SafetyConfig, logger: Logger) {
     this.config = config;
     this.logger = logger;
+  }
+
+  setProjectPath(path: string): void {
+    this.projectPath = path;
+    // Load persisted spend on startup
+    const spendFile = this.getSpendFilePath();
+    if (spendFile && existsSync(spendFile)) {
+      try {
+        const data = JSON.parse(readFileSync(spendFile, 'utf-8'));
+        if (data.date === this.dailySpendDate) {
+          this.dailySpend = data.spend || 0;
+          this.logger.info({ spend: this.dailySpend, date: this.dailySpendDate }, 'Restored daily spend from disk');
+        }
+      } catch { /* ignore corrupt file */ }
+    }
+  }
+
+  private getSpendFilePath(): string | null {
+    return this.projectPath ? join(this.projectPath, `spend-${this.dailySpendDate}.json`) : null;
+  }
+
+  private persistSpend(): void {
+    const filePath = this.getSpendFilePath();
+    if (filePath) {
+      try {
+        writeFileSync(filePath, JSON.stringify({ date: this.dailySpendDate, spend: this.dailySpend }), 'utf-8');
+      } catch { /* non-fatal */ }
+    }
   }
 
   setOnDayReset(cb: () => void): void {
@@ -65,6 +95,7 @@ export class SafetyModule {
       if (this.onDayReset) this.onDayReset();
     }
     this.dailySpend += usd;
+    this.persistSpend();
 
     if (this.dailySpend >= this.config.maxDailyBudgetUsd) {
       this.logger.warn({ spent: this.dailySpend, limit: this.config.maxDailyBudgetUsd }, 'Daily budget exhausted');

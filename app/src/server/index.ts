@@ -73,8 +73,8 @@ function parseArgs(): YunomiaConfig {
         if (typeof s.requireApprovalForSpawn === 'boolean') valid.requireApprovalForSpawn = s.requireApprovalForSpawn;
         config.safety = valid;
       }
-    } catch {
-      // Ignore bad config
+    } catch (err) {
+      console.warn(`Warning: Failed to parse ${configPath}:`, err);
     }
   }
 
@@ -269,6 +269,7 @@ async function main() {
 
   // Core modules
   const safety = new SafetyModule(config.safety, logger);
+  safety.setProjectPath(config.projectPath);
   const tasks = new TaskManager(config.projectPath, logger);
   const adapter = new AgentAdapter(logger);
   await adapter.init();
@@ -1453,6 +1454,10 @@ function buildSdkMcpTools(mcp: McpServer, z: typeof import('zod').z, toolFn: (..
     }, async (args) => mcp.handleToolCall('kill_worker', args)),
 
     tool('list_workers', 'List all active workers with task, runtime, and cost', {}, async (args) => mcp.handleToolCall('list_workers', args)),
+
+    tool('read_worker_output', 'Read output files from a completed worker task', {
+      taskId: z.string(),
+    }, async (args) => mcp.handleToolCall('read_worker_output', args)),
 
     tool('run_skill', 'Run a premade skill (red-team, security-scan, code-review, brand-audit, content-review, test-suite)', {
       skillName: z.string(),

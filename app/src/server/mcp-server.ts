@@ -174,6 +174,17 @@ export class McpServer {
         },
       },
       {
+        name: 'read_worker_output',
+        description: 'Read output files from a completed worker. Returns file names and content.',
+        input_schema: {
+          type: 'object',
+          properties: {
+            taskId: { type: 'string', description: 'Task ID to read output from (e.g. task-042)' },
+          },
+          required: ['taskId'],
+        },
+      },
+      {
         name: 'run_skill',
         description: 'Run a premade skill (e.g. red-team, security-scan, code-review, brand-audit, content-review, test-suite). Creates tasks for skill workers automatically.',
         input_schema: {
@@ -208,6 +219,8 @@ export class McpServer {
           return await this.killWorker(input);
         case 'list_workers':
           return this.listWorkers();
+        case 'read_worker_output':
+          return this.readWorkerOutput(input);
         case 'run_skill':
           return await this.runSkillHandler(input);
         default:
@@ -255,7 +268,7 @@ export class McpServer {
   private async tasksUpdate(input: Record<string, unknown>): Promise<ToolResult> {
     const taskId = input.taskId as string;
     const changes: Record<string, unknown> = {};
-    if (input.status) changes.status = input.status;
+    if (input.status && input.status !== 'active') changes.status = input.status; // active only via spawn_worker
     if (input.notes !== undefined) changes.notes = input.notes;
     if (input.priority) changes.priority = input.priority;
     if (input.model) changes.model = input.model;
@@ -507,6 +520,35 @@ ${projectContext}
     });
 
     return this.ok(lines.join('\n'));
+  }
+
+  private readWorkerOutput(input: Record<string, unknown>): ToolResult {
+    const taskId = input.taskId as string;
+    const outputDir = join(this.projectPath, 'workers', taskId, 'output');
+
+    if (!existsSync(outputDir)) {
+      return this.error(`No output directory for task ${taskId}`);
+    }
+
+    const files = fsReaddirSync(outputDir);
+    if (files.length === 0) {
+      return this.ok(`Task ${taskId} output directory is empty.`);
+    }
+
+    const results: string[] = [`Task ${taskId} output (${files.length} files):\n`];
+    for (const file of files.slice(0, 10)) { // cap at 10 files
+      const filePath = join(outputDir, file);
+      try {
+        const content = readFileSync(filePath, 'utf-8');
+        const preview = content.length > 2000 ? content.slice(0, 2000) + '\n... (truncated)' : content;
+        results.push(`--- ${file} ---\n${preview}\n`);
+      } catch {
+        results.push(`--- ${file} --- (unreadable)\n`);
+      }
+    }
+    if (files.length > 10) results.push(`\n... and ${files.length - 10} more files`);
+
+    return this.ok(results.join('\n'));
   }
 
   private async runSkillHandler(input: Record<string, unknown>): Promise<ToolResult> {

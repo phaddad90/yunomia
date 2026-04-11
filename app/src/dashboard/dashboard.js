@@ -26,6 +26,11 @@ function connectWs() {
     setTimeout(() => hideBanner(), 2000);
     refreshStatus();
     fetch('/api/tasks').then(r => r.json()).then(data => renderTasks(data)).catch(() => {});
+    // Sync paused state on reconnect
+    fetch('/api/safety').then(r => r.json()).then(data => {
+      if (data.paused && !paused) { paused = true; document.getElementById('pause-btn').textContent = 'Resume'; }
+      if (!data.paused && paused) { paused = false; document.getElementById('pause-btn').textContent = 'Pause'; }
+    }).catch(() => {});
   };
 
   socket.onmessage = (event) => {
@@ -996,9 +1001,11 @@ function showSleepScreen() {
 // ─── Tabs ───
 
 function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+  const activeTab = document.querySelector(`[data-tab="${tab}"]`);
+  activeTab.classList.add('active');
+  activeTab.setAttribute('aria-selected', 'true');
   document.getElementById(`tab-${tab}`).classList.add('active');
 
   if (tab === 'terminals') {
@@ -1095,23 +1102,33 @@ function showOnboarding(data) {
 }
 
 async function submitOnboarding() {
+  const name = document.getElementById('ob-name').value.trim();
+  if (!name) { alert('Project name is required'); return; }
+
   const body = {
-    projectName: document.getElementById('ob-name').value,
+    projectName: name,
     mission: document.getElementById('ob-mission').value,
     goals: document.getElementById('ob-goals').value,
     preset: document.getElementById('ob-preset').value,
     model: document.getElementById('ob-model').value,
   };
 
-  await fetch('/api/onboarding', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  document.getElementById('onboarding-screen').style.display = 'none';
-  // Reload to start fresh with the new config
-  location.reload();
+  try {
+    const res = await fetch('/api/onboarding', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+      alert('Setup failed: ' + (err.error || res.statusText));
+      return;
+    }
+    document.getElementById('onboarding-screen').style.display = 'none';
+    location.reload();
+  } catch (err) {
+    alert('Connection failed. Is the server running?');
+  }
 }
 
 // ─── SOUL / GOALS Editors ───
@@ -1152,6 +1169,7 @@ async function loadProject() {
 
 async function saveProject() {
   const content = document.getElementById('project-editor').value;
+  if (!content.trim() && !confirm('PROJECT.md will be empty. Are you sure?')) return;
   const statusEl = document.getElementById('project-save-status');
   await fetch('/api/project', {
     method: 'PUT',
@@ -1182,6 +1200,7 @@ async function loadSoulGoals() {
 
 async function saveSoul() {
   const content = document.getElementById('soul-editor').value;
+  if (!content.trim() && !confirm('SOUL.md will be empty. Are you sure?')) return;
   const statusEl = document.getElementById('soul-save-status');
   await fetch('/api/ceo/soul', {
     method: 'PUT',
@@ -1195,6 +1214,7 @@ async function saveSoul() {
 
 async function saveGoals() {
   const content = document.getElementById('goals-editor').value;
+  if (!content.trim() && !confirm('GOALS.md will be empty. Are you sure?')) return;
   const statusEl = document.getElementById('goals-save-status');
   await fetch('/api/ceo/goals', {
     method: 'PUT',

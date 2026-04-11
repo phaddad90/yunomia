@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, watchFile, unwatchFile, appendFileSync, mkdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, copyFileSync, existsSync, watchFile, unwatchFile, appendFileSync, mkdirSync, statSync, readdirSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import type { Task, TaskStatus, TaskPriority, ModelChoice, AuditEntry, TasksState } from './types.js';
 import type { Logger } from 'pino';
@@ -358,12 +358,21 @@ export class TaskManager {
   private audit(actor: 'ceo' | 'human' | 'system', action: string, taskId: string | undefined, detail: string): void {
     const entry: AuditEntry = { timestamp: new Date().toISOString(), actor, action, taskId, detail };
     try {
-      // Rotate if over 1MB
+      // Rotate if over 1MB + clean old .bak files (keep 7)
       if (existsSync(this.auditPath)) {
         const stat = statSync(this.auditPath);
         if (stat.size > 1024 * 1024) {
           const bakPath = this.auditPath.replace('.jsonl', `-${new Date().toISOString().split('T')[0]}.jsonl.bak`);
           renameSync(this.auditPath, bakPath);
+          // Clean old .bak files
+          try {
+            const dir = dirname(this.auditPath);
+            const baks = readdirSync(dir).filter(f => f.endsWith('.jsonl.bak')).sort();
+            while (baks.length > 7) {
+              const old = baks.shift()!;
+              try { unlinkSync(join(dir, old)); } catch { /* ignore */ }
+            }
+          } catch { /* ignore */ }
         }
       }
       appendFileSync(this.auditPath, JSON.stringify(entry) + '\n');
