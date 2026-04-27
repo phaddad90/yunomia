@@ -1,1272 +1,529 @@
-// ─── Yunomia Dashboard ───
-// Vanilla JS. No framework. No build step.
+// PrintPepper Mission Control — vanilla JS, no framework.
+// One brain. Many hands. No waste.
 
-// ─── State ───
-let ws = null;
-let ceoTerminal = null;
-let ceoFitAddon = null;
-let workerTerminals = {};
-let activeTerminal = 'ceo';
-let paused = false;
-let stopped = false;
-let lastPromptTime = 0;
-let statusFailCount = 0;
-const PROMPT_COOLDOWN = 5000;
+const AGENT_EMOJI = { SA: '🟧', AD: '🟦', WA: '🟪', DA: '🟨', QA: '🟥', WD: '🌐', CEO: '🎯', TA: '🛠' };
+const COLUMNS = [
+  { id: 'backlog',     label: 'Backlog' },
+  { id: 'triage',      label: 'Triage' },
+  { id: 'assigned',    label: 'Assigned' },
+  { id: 'in_progress', label: 'In Progress' },
+  { id: 'in_review',   label: 'In Review' },
+  { id: 'done',        label: 'Done' },
+  { id: 'released',    label: 'Released' },
+];
+
+const state = {
+  me: 'TA',
+  tickets: [],
+  agents: [],
+  filters: { audience: '', assignee: '', q: '' },
+  activity: [],
+  ws: null,
+  refreshTimer: null,
+  selectedTicketId: null,
+};
+
+const $  = (s, root = document) => root.querySelector(s);
+const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
+
+// ─── Boot ───
+
+(async function boot() {
+  try {
+    const me = await fetch('/api/me').then((r) => r.json());
+    state.me = me.agentCode || 'TA';
+    $('#who-agent').textContent = `${AGENT_EMOJI[state.me] || ''} ${state.me}`;
+  } catch { /* keep default */ }
+
+  bindUi();
+  connectWs();
+  await refreshBoard();
+})();
+
+// ─── UI bindings ───
+
+function bindUi() {
+  // Tab switcher
+  $$('.tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      $$('.tab').forEach((b) => b.classList.toggle('active', b === btn));
+      const which = btn.dataset.tab;
+      $$('.tab-panel').forEach((p) => p.classList.toggle('hidden', p.id !== `panel-${which}`));
+      if (which === 'reports') renderReports();
+    });
+  });
+
+  $('#refresh').addEventListener('click', refreshBoard);
+  $('#filter-audience').addEventListener('change', (e) => { state.filters.audience = e.target.value; renderBoard(); });
+  $('#filter-assignee').addEventListener('change', (e) => { state.filters.assignee = e.target.value; renderBoard(); });
+  $('#filter-q').addEventListener('input', debounce((e) => { state.filters.q = e.target.value.toLowerCase(); renderBoard(); }, 200));
+
+  // Note form
+  $('#note-form').addEventListener('submit', (e) => { e.preventDefault(); submitNote(); });
+  $('#btn-screenshot').addEventListener('click', () => $('#file-input').click());
+  $('#file-input').addEventListener('change', handleFileAttach);
+  $('#btn-voice').addEventListener('click', toggleVoice);
+
+  // Side panel
+  $('#side-close').addEventListener('click', closeSidePanel);
+  $('#side-copy').addEventListener('click', copyPromptForSelected);
+  $('#side-start').addEventListener('click', () => transitionSelected('start'));
+  $('#side-handoff').addEventListener('click', () => transitionSelected('handoff'));
+  $('#side-done').addEventListener('click', () => transitionSelected('done'));
+
+  // Drag screenshots into the body (textarea)
+  const note = $('#note-body');
+  note.addEventListener('paste', handlePaste);
+  ['dragenter','dragover'].forEach((ev) => note.addEventListener(ev, (e) => { e.preventDefault(); note.style.borderColor = 'var(--pepper)'; }));
+  ['dragleave','drop'].forEach((ev) => note.addEventListener(ev, () => { note.style.borderColor = ''; }));
+  note.addEventListener('drop', handleDrop);
+}
 
 // ─── WebSocket ───
 
 function connectWs() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(`${protocol}//${location.host}/ws`);
-
-  socket.onopen = () => {
-    ws = socket;
-    setConnectionStatus('online');
-    showBanner('Connected', 'info');
-    setTimeout(() => hideBanner(), 2000);
-    refreshStatus();
-    fetch('/api/tasks').then(r => r.json()).then(data => renderTasks(data)).catch(() => {});
-    // Sync paused state on reconnect
-    fetch('/api/safety').then(r => r.json()).then(data => {
-      if (data.paused && !paused) { paused = true; document.getElementById('pause-btn').textContent = 'Resume'; }
-      if (!data.paused && paused) { paused = false; document.getElementById('pause-btn').textContent = 'Pause'; }
-    }).catch(() => {});
-  };
-
-  socket.onmessage = (event) => {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+  state.ws = ws;
+  ws.addEventListener('open', () => setLive(true));
+  ws.addEventListener('close', () => { setLive(false); setTimeout(connectWs, 2000); });
+  ws.addEventListener('message', (e) => {
     try {
-      const msg = JSON.parse(event.data);
-      handleWsMessage(msg);
-    } catch (e) {
-      console.error('Bad WS message:', e);
-    }
-  };
-
-  socket.onclose = () => {
-    if (ws === socket) ws = null;
-    if (stopped) return;
-    setConnectionStatus('offline');
-    showBanner('Disconnected - reconnecting...', 'warning');
-    setTimeout(connectWs, 3000);
-  };
-
-  socket.onerror = () => {
-    socket.close(); // close THIS socket, not whatever ws points to
-  };
-}
-
-function handleWsMessage(msg) {
-  switch (msg.type) {
-    case 'terminal_output':
-      handleTerminalOutput(msg.agentId, msg.data);
-      break;
-    case 'tasks_updated':
-      renderTasks(msg.data);
-      break;
-    case 'agent_status':
-      handleAgentStatus(msg.agentId, msg.data);
-      break;
-    case 'safety_alert':
-      handleSafetyAlert(msg.data);
-      break;
-    case 'cost_update':
-      handleCostUpdate(msg.data);
-      break;
-    case 'spawn_approval_request':
-      handleSpawnApproval(msg.data);
-      break;
-  }
-}
-
-// ─── Terminal ───
-
-function initTerminals() {
-  ceoTerminal = new Terminal({
-    theme: {
-      background: '#0a0a0f',
-      foreground: '#e4e4ef',
-      cursor: '#6366f1',
-      cursorAccent: '#0a0a0f',
-      selectionBackground: 'rgba(99, 102, 241, 0.3)',
-    },
-    fontFamily: "'SF Mono', 'Cascadia Code', 'JetBrains Mono', monospace",
-    fontSize: 13,
-    lineHeight: 1.2,
-    scrollback: 1000,
-    cursorBlink: true,
-  });
-
-  ceoFitAddon = new FitAddon.FitAddon();
-  ceoTerminal.loadAddon(ceoFitAddon);
-  ceoTerminal.open(document.getElementById('terminal-ceo'));
-
-  // Fit after layout settles (double-rAF ensures paint has happened)
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    ceoFitAddon.fit();
-  }));
-
-  ceoTerminal.writeln('\x1b[1;35m  Yunomia CEO Terminal\x1b[0m');
-  ceoTerminal.writeln('\x1b[90m  Waiting for CEO agent to start...\x1b[0m\r\n');
-
-  window.addEventListener('resize', () => {
-    if (activeTerminal === 'ceo' && ceoFitAddon) {
-      ceoFitAddon.fit();
-    } else if (workerTerminals[activeTerminal]?.fitAddon) {
-      workerTerminals[activeTerminal].fitAddon.fit();
-    }
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'tickets_changed') refreshBoard();
+      else if (msg.type === 'audit_event') prependActivity(msg.data);
+      else if (msg.type === 'toast') toast(msg.data.text, msg.data.kind);
+    } catch { /* ignore */ }
   });
 }
 
-let ceoOutputTimer = null;
-
-function handleTerminalOutput(agentId, data) {
-  // xterm.js needs \r\n - bare \n moves cursor down without returning to column 0
-  const normalized = typeof data === 'string' ? data.replace(/\r?\n/g, '\r\n') : data;
-
-  if (!agentId || agentId === 'ceo') {
-    if (ceoTerminal) {
-      ceoTerminal.write(normalized);
-      ceoTerminal.scrollToBottom();
-      // Timestamp after CEO stops sending for 2 seconds
-      if (ceoOutputTimer) clearTimeout(ceoOutputTimer);
-      ceoOutputTimer = setTimeout(() => {
-        ceoTerminal.write(`\r\n\x1b[90m${timeStamp()}\x1b[0m\r\n`);
-        ceoOutputTimer = null;
-      }, 2000);
-    }
-  } else {
-    if (!workerTerminals[agentId]) {
-      createWorkerTerminal(agentId);
-    }
-    workerTerminals[agentId].terminal.write(normalized);
-    workerTerminals[agentId].terminal.scrollToBottom();
-  }
+function setLive(on) {
+  $('#live-dot').dataset.state = on ? 'on' : 'off';
+  $('#live-label').textContent = on ? 'live' : 'reconnecting…';
 }
 
-function createWorkerTerminal(agentId) {
-  const container = document.createElement('div');
-  container.id = `terminal-${agentId}`;
-  container.className = 'terminal-wrapper';
-  // Temporarily visible for fit measurement
-  document.querySelector('.terminal-main').appendChild(container);
+// ─── Refresh ───
 
-  const terminal = new Terminal({
-    theme: {
-      background: '#0a0a0f',
-      foreground: '#e4e4ef',
-      cursor: '#22c55e',
-    },
-    fontFamily: "'SF Mono', 'Cascadia Code', 'JetBrains Mono', monospace",
-    fontSize: 13,
-    lineHeight: 1.2,
-    scrollback: 1000,
-  });
-
-  const fitAddon = new FitAddon.FitAddon();
-  terminal.loadAddon(fitAddon);
-  terminal.open(container);
-
-  container.classList.add('hidden'); // hidden until user clicks
-
-  workerTerminals[agentId] = { terminal, fitAddon, container, needsFit: true };
-  addWorkerPill(agentId);
-}
-
-function addWorkerPill(agentId) {
-  const bar = document.getElementById('worker-bar');
-  const existing = document.getElementById(`pill-${agentId}`);
-  if (existing) return;
-
-  const pill = document.createElement('div');
-  pill.className = 'worker-pill';
-  pill.id = `pill-${agentId}`;
-  pill.onclick = () => showWorkerTerminal(agentId);
-  pill.innerHTML = `<span class="dot"></span>${escapeHtml(agentId.slice(0, 16))}`;
-  bar.appendChild(pill);
-}
-
-function showWorkerTerminal(agentId) {
-  if (!workerTerminals[agentId]) return;
-
-  document.getElementById('terminal-ceo').classList.add('hidden');
-  Object.values(workerTerminals).forEach(w => w.container.classList.add('hidden'));
-
-  workerTerminals[agentId].container.classList.remove('hidden');
-  requestAnimationFrame(() => {
-    workerTerminals[agentId].fitAddon.fit();
-    workerTerminals[agentId].needsFit = false;
-  });
-  activeTerminal = agentId;
-
-  document.querySelectorAll('.worker-pill').forEach(p => p.classList.remove('active'));
-  const pill = document.getElementById(`pill-${agentId}`);
-  if (pill) pill.classList.add('active');
-
-  document.getElementById('back-to-ceo').style.display = 'block';
-}
-
-function showCeoTerminal() {
-  Object.values(workerTerminals).forEach(w => w.container.classList.add('hidden'));
-  document.getElementById('terminal-ceo').classList.remove('hidden');
-  requestAnimationFrame(() => { if (ceoFitAddon) ceoFitAddon.fit(); });
-  activeTerminal = 'ceo';
-
-  document.querySelectorAll('.worker-pill').forEach(p => p.classList.remove('active'));
-  document.getElementById('back-to-ceo').style.display = 'none';
-}
-
-// ─── Tasks ───
-
-function renderTasks(state) {
-  const container = document.getElementById('tasks-container');
-  if (!state || !state.tasks) return;
-
-  const sections = { planned: [], scheduled: [], active: [], done: [], failed: [], pulled: [] };
-  state.tasks.forEach(t => sections[t.status]?.push(t));
-
-  const labels = { planned: 'Planned', scheduled: 'Scheduled', active: 'Active', done: 'Done', failed: 'Failed', pulled: 'Pulled' };
-  const checkmarks = { planned: '[ ]', scheduled: '[@]', active: '[~]', done: '[x]', failed: '[!]', pulled: '[-]' };
-  const checkClass = { planned: '', scheduled: 'scheduled', active: 'active', done: 'done', failed: 'failed', pulled: 'pulled' };
-
-  let html = '';
-  for (const [status, tasks] of Object.entries(sections)) {
-    html += `<div class="tasks-section">`;
-    html += `<div class="tasks-section-title">${labels[status]} (${tasks.length})</div>`;
-
-    if (tasks.length === 0) {
-      html += `<div style="padding: 8px 12px; font-size: 12px; color: var(--text-muted);">No tasks</div>`;
-    } else {
-      for (const t of tasks) {
-        const priorityClass = t.priority === 'critical' ? 'priority-critical' : t.priority === 'high' ? 'priority-high' : '';
-        html += `
-          <div class="task-item" data-id="${escapeHtml(t.id)}">
-            <span class="task-checkbox ${checkClass[status]}">${checkmarks[status]}</span>
-            <div class="task-body">
-              <div class="task-title">${escapeHtml(t.title)}</div>
-              <div class="task-meta">
-                <span class="task-tag">${escapeHtml(t.id)}</span>
-                <span class="task-tag model">${escapeHtml(t.model)}</span>
-                <span class="task-tag ${priorityClass}">${escapeHtml(t.priority)}</span>
-                <span class="task-tag">$${(t.maxBudgetUsd ?? 0).toFixed(2)}</span>
-                ${t.tokenCost?.totalUsd > 0 ? `<span class="task-tag" style="color: var(--green);">$${t.tokenCost.totalUsd.toFixed(2)} actual</span>` : ''}
-                ${status === 'active' && t.assignee && activeAgentCosts[t.assignee] ? `<span class="task-tag" style="color: var(--amber);">$${activeAgentCosts[t.assignee].toFixed(2)} running</span>` : ''}
-                ${t.scheduledFor ? `<span class="task-tag" style="color: var(--blue);">@ ${new Date(t.scheduledFor).toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>` : ''}
-                ${t.notes ? `<span style="color: var(--text-muted);">${escapeHtml(t.notes)}</span>` : ''}
-              </div>
-            </div>
-            <div class="task-actions">
-              ${status === 'failed' ? `<button class="btn" data-action="retry" data-id="${escapeHtml(t.id)}">Retry</button>` : ''}
-              ${status === 'planned' ? `<button class="btn btn-danger" data-action="pull" data-id="${escapeHtml(t.id)}">Pull</button>` : ''}
-              ${status === 'active' ? `<button class="btn btn-danger" data-action="stop" data-id="${escapeHtml(t.id)}">Stop</button>` : ''}
-            </div>
-          </div>`;
-      }
-    }
-    html += `</div>`;
-  }
-
-  container.innerHTML = html;
-
-  // Attach event listeners (not inline onclick - prevents XSS)
-  container.querySelectorAll('[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const action = btn.getAttribute('data-action');
-      const id = btn.getAttribute('data-id');
-      if (action === 'retry') retryTask(id);
-      else if (action === 'pull') pullTask(id);
-      else if (action === 'stop') failTask(id);
-    });
-  });
-}
-
-async function addTask() {
-  const input = document.getElementById('add-task-input');
-  const scheduleInput = document.getElementById('add-task-schedule');
-  const title = input.value.trim();
-  if (!title) return;
-
-  const body = { title };
-  if (scheduleInput.value) {
-    body.scheduledFor = new Date(scheduleInput.value).toISOString();
-  }
-
-  await fetch('/api/tasks', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  input.value = '';
-  scheduleInput.value = '';
-}
-
-async function retryTask(id) {
-  await fetch(`/api/tasks/${id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'planned', notes: '', retryCount: 0 }),
-  });
-}
-
-async function pullTask(id) {
-  await fetch(`/api/tasks/${id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'pulled', notes: 'Pulled by human' }),
-  });
-}
-
-async function failTask(id) {
-  const agents = await (await fetch('/api/agents')).json();
-  const worker = agents.find(a => a.taskId === id && a.role === 'worker');
-  if (worker) {
-    await fetch(`/api/agents/${worker.id}/kill`, { method: 'POST' });
-  } else {
-    await fetch(`/api/tasks/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'failed', notes: 'Stopped by human' }),
-    });
-  }
-}
-
-// ─── Status Tab ───
-
-async function refreshStatus() {
+let refreshing = false;
+async function refreshBoard() {
+  if (refreshing) return;
+  refreshing = true;
   try {
-    const [health, heartbeat, agents, safety] = await Promise.all([
-      fetch('/health').then(r => r.json()),
-      fetch('/api/heartbeat').then(r => r.json()),
-      fetch('/api/agents').then(r => r.json()),
-      fetch('/api/safety').then(r => r.json()),
-    ]);
-
-    statusFailCount = 0; // reset on success
-
-    document.getElementById('ceo-status-rows').innerHTML = `
-      ${statusRow('Version', 'v' + (health.version || '?'))}
-      ${statusRow('Status', health.ceo.status, health.ceo.status === 'running' ? 'green' : 'amber')}
-      ${statusRow('Model', health.ceo.model)}
-      ${statusRow('Session Age', health.ceo.sessionAge)}
-      ${statusRow('Tokens Today', health.ceo.tokensToday.toLocaleString())}
-      ${statusRow('Cost Today', '$' + health.ceo.costToday.toFixed(2))}
-      ${statusRow('Heartbeat', heartbeat.state + ' (' + heartbeat.intervalMinutes + 'min)')}
-      ${statusRow('Next In', heartbeat.nextFireIn + 's')}
-    `;
-
-    const workers = agents.filter(a => a.role === 'worker');
-    if (workers.length === 0) {
-      document.getElementById('worker-status-rows').innerHTML =
-        '<div style="padding: 4px 0; font-size: 13px; color: var(--text-muted);">No active workers</div>';
-    } else {
-      document.getElementById('worker-status-rows').innerHTML = workers.map(w => `
-        ${statusRow(w.id.slice(0, 12), w.status, w.status === 'running' ? 'green' : 'amber')}
-        ${w.taskId ? statusRow('  Task', w.taskId) : ''}
-        ${w.info ? statusRow('  Cost', '$' + (w.info.costUsd || 0).toFixed(2)) : ''}
-      `).join('');
-    }
-
-    document.getElementById('cost-status-rows').innerHTML = `
-      ${statusRow('Today', '$' + health.budget.spent.toFixed(2), health.budget.percent >= 80 ? 'amber' : '')}
-      ${statusRow('Budget', '$' + health.budget.limit.toFixed(2))}
-      ${statusRow('Used', health.budget.percent.toFixed(1) + '%', health.budget.percent >= 100 ? 'red' : health.budget.percent >= 80 ? 'amber' : 'green')}
-    `;
-
-    document.getElementById('safety-status-rows').innerHTML = `
-      ${statusRow('Paused', safety.paused ? 'Yes' : 'No', safety.paused ? 'amber' : 'green')}
-      ${statusRow('Workers', health.workers.active + '/' + health.workers.max)}
-      ${statusRow('Inactive', safety.inactiveMinutes + ' min')}
-      ${statusRow('Budget', safety.budgetPercent.toFixed(0) + '%', safety.budgetPercent >= 80 ? 'amber' : 'green')}
-      ${statusRow('Approvals Pending', safety.pendingApprovals.length.toString())}
-    `;
-
-    // Populate settings with current values (only on first load)
-    loadSettingsValues(safety.config, health.ceo.model);
-
-    updateStatusBar(health, heartbeat);
-    updateCostBadge(health.budget);
-
-    // Version + project display
-    const versionEl = document.getElementById('app-version');
-    if (versionEl && health.version) versionEl.textContent = 'v' + health.version;
-    if (health.project) {
-      currentProjectPath = health.project;
-      const projEl = document.getElementById('project-name');
-      if (projEl) projEl.textContent = health.project.split('/').pop() || health.project;
-    }
-
-    // Fetch and render metrics
-    try {
-      const metricsSummary = await fetch('/api/metrics/summary').then(r => r.json());
-      renderMetrics(metricsSummary);
-    } catch { /* metrics endpoint may not be ready */ }
-  } catch (e) {
-    statusFailCount++;
-    if (statusFailCount >= 3) {
-      showBanner('Status polling failed - data may be stale', 'warning');
-    }
+    const params = new URLSearchParams();
+    if (state.filters.audience) params.set('audience', state.filters.audience);
+    if (state.filters.assignee) params.set('assignee', state.filters.assignee);
+    const r = await fetch('/api/board/tickets?' + params.toString());
+    if (!r.ok) throw new Error(`board fetch ${r.status}`);
+    const data = await r.json();
+    state.tickets = data.tickets || [];
+    state.agents = data.agents || [];
+    renderAll();
+  } catch (err) {
+    toast(String(err.message || err), 'error');
+  } finally {
+    refreshing = false;
   }
 }
 
-function statusRow(label, value, colorClass) {
-  return `<div class="status-row">
-    <span class="status-label">${escapeHtml(String(label))}</span>
-    <span class="status-value ${colorClass || ''}">${escapeHtml(String(value))}</span>
-  </div>`;
+function renderAll() {
+  renderAgents();
+  renderStats();
+  renderBundle();
+  renderBoard();
+  renderInbox();
 }
 
-// ─── Metrics Card ───
+// ─── Agents (left rail) ───
 
-function renderMetrics(summary) {
-  const el = document.getElementById('metrics-status-rows');
-  if (!el || !summary) return;
+function renderAgents() {
+  const ul = $('#agent-list');
+  ul.innerHTML = '';
+  for (const a of state.agents) {
+    const li = document.createElement('li');
+    li.className = 'agent-card';
+    li.innerHTML = `
+      <span class="agent-emoji">${a.emoji}</span>
+      <span class="agent-code">${a.code}</span>
+      <span class="agent-meta">${a.current ? `${a.current.ticket_human_id} · ${a.current.status.replace('_',' ')}` : 'idle'}</span>
+      <span class="light" data-state="${a.light}" title="${a.light}"></span>
+    `;
+    li.addEventListener('click', () => openSoul(a.code));
+    ul.appendChild(li);
+  }
+}
 
-  const successColor = summary.workerSuccessRate >= 80 ? 'green' : summary.workerSuccessRate >= 50 ? 'amber' : 'red';
-  const skipColor = summary.heartbeatSkipRate <= 20 ? 'green' : summary.heartbeatSkipRate <= 50 ? 'amber' : 'red';
+// ─── Stats ───
 
-  el.innerHTML = `
-    ${statusRow('Total Cost', '$' + (summary.totalCostUsd || 0).toFixed(2))}
-    ${statusRow('Session Duration', (summary.sessionDurationMinutes || 0) + 'm')}
-    ${statusRow('Tasks Completed', String(summary.tasksCompleted || 0), 'green')}
-    ${statusRow('Tasks Failed', String(summary.tasksFailed || 0), summary.tasksFailed > 0 ? 'red' : '')}
-    ${statusRow('Workers Spawned', String(summary.workersSpawned || 0))}
-    ${statusRow('Success Rate', (summary.workerSuccessRate || 0) + '%', successColor)}
-    ${statusRow('Heartbeats', String(summary.heartbeatCount || 0))}
-    ${statusRow('HB Skip Rate', (summary.heartbeatSkipRate || 0) + '%', skipColor)}
-    ${statusRow('Human Actions', String(summary.humanInteractions || 0))}
-    ${statusRow('CEO Restarts', String(summary.ceoRestarts || 0))}
+function renderStats() {
+  const open = state.tickets.filter((t) => ['assigned','in_progress'].includes(t.status)).length;
+  const review = state.tickets.filter((t) => t.status === 'in_review').length;
+  const triage = state.tickets.filter((t) => ['triage','backlog'].includes(t.status)).length;
+  const today = todayIso();
+  const doneToday = state.tickets.filter((t) => t.status === 'done' && (t.updated_at || '').startsWith(today)).length;
+  $('#stat-open').textContent = open;
+  $('#stat-review').textContent = review;
+  $('#stat-triage').textContent = triage;
+  $('#stat-done').textContent = doneToday;
+}
+
+function renderBundle() {
+  const ul = $('#deploy-bundle');
+  const ready = state.tickets.filter((t) => t.status === 'done' && t.audience === 'admin');
+  ul.innerHTML = '';
+  if (!ready.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'No tickets queued for deploy';
+    ul.appendChild(li);
+    return;
+  }
+  for (const t of ready.slice(0, 6)) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${t.ticket_human_id}</span><span>${(t.assignee_agent || '—')}</span>`;
+    li.addEventListener('click', () => openTicket(t.id));
+    ul.appendChild(li);
+  }
+}
+
+// ─── Board (kanban) ───
+
+function renderBoard() {
+  const root = $('#kanban');
+  root.innerHTML = '';
+  const filtered = state.tickets.filter(matchFilters);
+  for (const col of COLUMNS) {
+    const cards = filtered.filter((t) => t.status === col.id);
+    const colEl = document.createElement('div');
+    colEl.className = 'col';
+    colEl.innerHTML = `<div class="col-head"><span>${col.label}</span><span class="count">${cards.length}</span></div>`;
+    for (const t of cards) colEl.appendChild(renderTicketCard(t));
+    root.appendChild(colEl);
+  }
+}
+
+function matchFilters(t) {
+  const f = state.filters;
+  if (f.audience && t.audience !== f.audience) return false;
+  if (f.assignee && t.assignee_agent !== f.assignee) return false;
+  if (f.q) {
+    const hay = (t.title + ' ' + (t.body_md || '') + ' ' + t.ticket_human_id).toLowerCase();
+    if (!hay.includes(f.q)) return false;
+  }
+  return true;
+}
+
+function renderTicketCard(t) {
+  const div = document.createElement('div');
+  div.className = 'ticket';
+  div.dataset.id = t.id;
+  div.innerHTML = `
+    <div class="ticket-head">
+      <span class="ticket-id">${t.ticket_human_id}</span>
+      <span class="ticket-assignee">${t.assignee_agent ? AGENT_EMOJI[t.assignee_agent] || '' : ''} ${t.assignee_agent || ''}</span>
+    </div>
+    <div class="ticket-title">${escapeHtml(t.title)}</div>
+    <div class="ticket-foot">
+      <span class="ticket-pill ${t.audience}">${t.audience}</span>
+      <span class="ticket-pill ${t.type}">${t.type}</span>
+    </div>
   `;
+  div.addEventListener('click', () => openTicket(t.id));
+  return div;
 }
 
-// ─── Status Bar ───
+// ─── Inbox / Activity / Reports ───
 
-function updateStatusBar(health, heartbeat) {
-  const dot = document.getElementById('ceo-dot');
-  const state = document.getElementById('ceo-state');
-  const workers = document.getElementById('worker-count');
-  const cost = document.getElementById('status-cost');
-  const hb = document.getElementById('heartbeat-info');
-  const bar = document.getElementById('status-bar');
-
-  const ceoStatus = health.ceo.status;
-  if (ceoStatus === 'running') {
-    dot.className = 'dot green';
-    state.textContent = heartbeat.state === 'paused' ? 'Paused' : heartbeat.nextFireIn > 0 ? `Waiting (${Math.ceil(heartbeat.nextFireIn / 60)}m)` : 'Thinking';
-  } else {
-    dot.className = 'dot amber';
-    state.textContent = ceoStatus;
-  }
-
-  workers.textContent = `${health.workers.active} worker${health.workers.active !== 1 ? 's' : ''}`;
-  cost.textContent = `$${health.budget.spent.toFixed(2)} today`;
-  hb.textContent = `HB: ${heartbeat.intervalMinutes}m`;
-
-  bar.className = 'status-bar';
-  if (health.budget.percent >= 100) bar.classList.add('danger');
-  else if (health.budget.percent >= 80 || health.status === 'degraded') bar.classList.add('warning');
+function renderInbox() {
+  const triage = state.tickets.filter((t) => t.status === 'triage' || (t.assignee_agent === 'CEO' && t.status !== 'done' && t.status !== 'released'));
+  $('#inbox-count').textContent = triage.length;
+  fillTicketList($('#inbox-quick'), triage.slice(0, 8));
+  fillTicketList($('#my-inbox'), state.tickets.filter((t) => t.assignee_agent === state.me && ['assigned','in_progress','in_review'].includes(t.status)));
 }
 
-function updateCostBadge(budget) {
-  const badge = document.getElementById('cost-badge');
-  badge.textContent = `$${budget.spent.toFixed(2)}`;
-  badge.className = 'cost-badge';
-  if (budget.percent >= 100) badge.classList.add('danger');
-  else if (budget.percent >= 80) badge.classList.add('warning');
-}
-
-// ─── Agent Status Events ───
-
-function handleAgentStatus(agentId, data) {
-  if (data.role === 'ceo') return;
-
-  const pill = document.getElementById(`pill-${agentId}`);
-  if (pill) {
-    const dot = pill.querySelector('.dot');
-    if (data.status === 'running') dot.className = 'dot';
-    else if (data.status === 'stopped') dot.className = 'dot stopped';
-    else if (data.status === 'crashed') dot.className = 'dot failed';
-  }
-
-  // Dispose worker terminal after completion (60s delay to allow reading output)
-  if (data.status === 'stopped' || data.status === 'crashed') {
-    setTimeout(() => {
-      const w = workerTerminals[agentId];
-      if (w) {
-        w.terminal.dispose();
-        w.container.remove();
-        delete workerTerminals[agentId];
-        if (activeTerminal === agentId) showCeoTerminal();
-      }
-    }, 60000);
-  }
-}
-
-function handleSafetyAlert(data) {
-  if (data.action === 'paused') {
-    paused = true;
-    document.getElementById('pause-btn').textContent = 'Resume';
-    showBanner(`System paused${data.reason ? ': ' + data.reason : ''}`, 'warning');
-  } else if (data.action === 'resumed') {
-    paused = false;
-    document.getElementById('pause-btn').textContent = 'Pause';
-    hideBanner();
-  }
-}
-
-function handleCostUpdate(data) {
-  const badge = document.getElementById('cost-badge');
-  badge.textContent = `$${data.dailySpend.toFixed(2)}`;
-  badge.className = 'cost-badge';
-  if (data.exhausted) badge.classList.add('danger');
-  else if (data.warning) badge.classList.add('warning');
-}
-
-function handleSpawnApproval(data) {
-  const banner = document.getElementById('banner');
-  banner.textContent = '';
-
-  const text = document.createTextNode(`CEO wants to spawn worker for ${data.taskId} (${data.title}). `);
-  banner.appendChild(text);
-
-  const approveBtn = document.createElement('button');
-  approveBtn.className = 'btn btn-accent';
-  approveBtn.textContent = 'Approve';
-  approveBtn.addEventListener('click', () => approveSpawn(data.taskId));
-  banner.appendChild(approveBtn);
-
-  banner.appendChild(document.createTextNode(' '));
-
-  const rejectBtn = document.createElement('button');
-  rejectBtn.className = 'btn btn-danger';
-  rejectBtn.textContent = 'Reject';
-  rejectBtn.addEventListener('click', () => rejectSpawn(data.taskId));
-  banner.appendChild(rejectBtn);
-
-  banner.className = 'banner visible';
-}
-
-// ─── Controls ───
-
-let pendingImages = []; // { data: base64, mediaType: string, previewUrl: string }
-let speechRecognition = null;
-let isRecording = false;
-
-function initPromptInput() {
-  const input = document.getElementById('prompt-input');
-  const wrapper = document.getElementById('prompt-wrapper');
-
-  // Enter sends, Shift+Enter inserts newline
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendPrompt();
-    }
-  });
-
-  // Auto-resize
-  input.addEventListener('input', () => {
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
-  });
-
-  // ─── Image Drag & Drop ───
-  wrapper.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    wrapper.classList.add('drag-over');
-  });
-
-  wrapper.addEventListener('dragleave', () => {
-    wrapper.classList.remove('drag-over');
-  });
-
-  wrapper.addEventListener('drop', (e) => {
-    e.preventDefault();
-    wrapper.classList.remove('drag-over');
-    handleFiles(e.dataTransfer.files);
-  });
-
-  // Paste images (Cmd+V)
-  input.addEventListener('paste', (e) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    for (const item of items) {
-      if (item.type.startsWith('image/')) {
-        e.preventDefault();
-        handleFiles([item.getAsFile()]);
-        break;
-      }
-    }
-  });
-
-  // Keyboard shortcut: V for voice (when not focused on textarea)
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'v' && document.activeElement !== input && !e.metaKey && !e.ctrlKey) {
-      toggleVoice();
-    }
-  });
-}
-
-function handleFiles(files) {
-  if (!files) return;
-  for (const file of files) {
-    if (!file.type.startsWith('image/')) continue;
-    if (pendingImages.length >= 5) break;
-    if (file.size > 5 * 1024 * 1024) continue; // 5MB max per image
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = e.target.result.split(',')[1];
-      const previewUrl = e.target.result;
-      pendingImages.push({ data: base64, mediaType: file.type, previewUrl });
-      renderImagePreviews();
-    };
-    reader.readAsDataURL(file);
-  }
-}
-
-function renderImagePreviews() {
-  const container = document.getElementById('image-previews');
-  container.innerHTML = '';
-  pendingImages.forEach((img, i) => {
-    const div = document.createElement('div');
-    div.className = 'image-preview';
-    div.innerHTML = `<img src="${img.previewUrl}" alt="attachment"><button class="remove-img" data-idx="${i}">x</button>`;
-    div.querySelector('.remove-img').addEventListener('click', () => {
-      pendingImages.splice(i, 1);
-      renderImagePreviews();
-    });
-    container.appendChild(div);
-  });
-}
-
-async function sendPrompt() {
-  const input = document.getElementById('prompt-input');
-  const message = input.value.trim();
-  if (!message && pendingImages.length === 0) return;
-
-  if (Date.now() - lastPromptTime < PROMPT_COOLDOWN) return;
-  lastPromptTime = Date.now();
-
-  const text = message || '(see attached images)';
-
-  // Echo in terminal - extra blank line for separation from CEO response
-  if (ceoTerminal) {
-    const ts = timeStamp();
-    const lines = text.split('\n').map(l => l.replace(/\r/g, ''));
-    ceoTerminal.write(`\r\n\x1b[1;36m> You:\x1b[0m ${lines[0]}\r\n`);
-    for (let i = 1; i < lines.length; i++) {
-      ceoTerminal.write(`\x1b[1;36m  |\x1b[0m ${lines[i]}\r\n`);
-    }
-    if (pendingImages.length > 0) {
-      ceoTerminal.write(`\x1b[1;36m  |\x1b[0m \x1b[90m[${pendingImages.length} image${pendingImages.length > 1 ? 's' : ''} attached]\x1b[0m\r\n`);
-    }
-    ceoTerminal.write(`\x1b[90m${ts}\x1b[0m\r\n`);
-  }
-
-  const body = { message: text };
-  if (pendingImages.length > 0) {
-    body.images = pendingImages.map(img => ({ data: img.data, mediaType: img.mediaType }));
-  }
-
-  input.value = '';
-  input.style.height = 'auto';
-  pendingImages = [];
-  renderImagePreviews();
-
-  await fetch('/api/prompt', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-}
-
-// ─── Voice Input ───
-
-function toggleVoice() {
-  if (isRecording) {
-    stopVoice();
+function fillTicketList(ul, items) {
+  ul.innerHTML = '';
+  if (!items.length) {
+    const li = document.createElement('li');
+    li.className = 'ticket-pill admin';
+    li.style.padding = '6px 10px';
+    li.textContent = 'Nothing here.';
+    ul.appendChild(li);
     return;
   }
-
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    showBanner('Voice input not supported in this browser', 'warning');
-    setTimeout(hideBanner, 3000);
-    return;
-  }
-
-  speechRecognition = new SpeechRecognition();
-  speechRecognition.continuous = true;
-  speechRecognition.interimResults = true;
-  speechRecognition.lang = 'en-GB';
-
-  const input = document.getElementById('prompt-input');
-  const btn = document.getElementById('mic-btn');
-  let finalTranscript = input.value;
-
-  speechRecognition.onresult = (event) => {
-    let interim = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      if (event.results[i].isFinal) {
-        finalTranscript += event.results[i][0].transcript + ' ';
-      } else {
-        interim += event.results[i][0].transcript;
-      }
-    }
-    input.value = finalTranscript + interim;
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
-  };
-
-  speechRecognition.onerror = (e) => {
-    if (e.error !== 'aborted') {
-      console.error('Speech error:', e.error);
-    }
-    stopVoice();
-  };
-
-  speechRecognition.onend = () => {
-    if (isRecording) {
-      // Restart if still in recording mode (browser auto-stops after silence)
-      try { speechRecognition.start(); } catch { stopVoice(); }
-    }
-  };
-
-  speechRecognition.start();
-  isRecording = true;
-  btn.classList.add('recording');
-  btn.textContent = 'Stop';
+  for (const t of items) ul.appendChild(renderTicketCard(t));
 }
 
-function stopVoice() {
-  if (speechRecognition) {
-    isRecording = false;
-    try { speechRecognition.stop(); } catch { /* ignore */ }
-    speechRecognition = null;
-  }
-  const btn = document.getElementById('mic-btn');
-  btn.classList.remove('recording');
-  btn.textContent = 'Mic';
-}
-
-async function togglePause() {
-  if (paused) {
-    await fetch('/api/safety/resume', { method: 'POST' });
-  } else {
-    await fetch('/api/safety/pause', { method: 'POST' });
+function prependActivity(row) {
+  state.activity.unshift(row);
+  state.activity = state.activity.slice(0, 100);
+  const ul = $('#activity-feed');
+  if (!ul) return;
+  ul.innerHTML = '';
+  for (const r of state.activity) {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <span class="when">${formatTime(r.created_at)}</span>
+      <span class="what">${escapeHtml(formatAction(r))}</span>
+      <span class="who">${escapeHtml(formatActor(r))}</span>
+    `;
+    ul.appendChild(li);
   }
 }
 
-async function stopAll() {
-  if (!confirm('Stop all agents and shut down?')) return;
-  showSleepScreen();
-  // Fire shutdown AFTER sleep screen is showing - server may die before response
-  fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
+function formatAction(row) {
+  const action = row.action.replace('ticket.', '');
+  const target = row.target || (row.details && row.details.id) || '';
+  return `${action} → ${target}`;
+}
+function formatActor(row) {
+  if (row.actor_kind === 'agent' && row.details && row.details.agent_id) return AGENT_EMOJI[row.details.agent_id] + ' ' + row.details.agent_id;
+  return row.actor_kind || '';
 }
 
-async function approveSpawn(taskId) {
-  await fetch(`/api/safety/approve/${taskId}`, { method: 'POST' });
-  hideBanner();
-}
-
-async function rejectSpawn(taskId) {
-  await fetch(`/api/safety/reject/${taskId}`, { method: 'POST' });
-  hideBanner();
-}
-
-// ─── Settings ───
-
-let settingsLoaded = false;
-
-function loadSettingsValues(config, ceoModel) {
-  if (settingsLoaded || !config) return;
-  settingsLoaded = true;
-
-  const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = String(val); };
-  set('setting-ceo-model', ceoModel || 'claude-sonnet-4-6');
-  set('setting-max-workers', config.maxConcurrentWorkers);
-  set('setting-budget', config.maxDailyBudgetUsd);
-  set('setting-heartbeat', config.heartbeatIntervalMinutes);
-  set('setting-stall-nudge', config.stallNudgeMinutes);
-  set('setting-stall-kill', config.stallKillMinutes);
-  set('setting-hard-timeout', config.hardTimeoutMinutes);
-  set('setting-inactivity', config.inactivityPauseMinutes);
-  set('setting-approval', String(config.requireApprovalForSpawn));
-}
-
-async function saveSettings() {
-  const get = (id) => document.getElementById(id)?.value;
-
-  const safetyUpdate = {
-    maxConcurrentWorkers: parseInt(get('setting-max-workers')),
-    maxDailyBudgetUsd: parseInt(get('setting-budget')),
-    heartbeatIntervalMinutes: parseInt(get('setting-heartbeat')),
-    stallNudgeMinutes: parseInt(get('setting-stall-nudge')),
-    stallKillMinutes: parseInt(get('setting-stall-kill')),
-    hardTimeoutMinutes: parseInt(get('setting-hard-timeout')),
-    inactivityPauseMinutes: parseInt(get('setting-inactivity')),
-    requireApprovalForSpawn: get('setting-approval') === 'true',
-  };
-
-  await fetch('/api/safety/config', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(safetyUpdate),
-  });
-
-  // CEO model change requires a note - can't hot-swap mid-session
-  const statusEl = document.getElementById('settings-status');
-  statusEl.textContent = 'Saved';
-  statusEl.style.color = 'var(--green)';
-
-  const selectedModel = get('setting-ceo-model');
-  const currentModel = document.querySelector('[id="ceo-status-rows"]')?.textContent;
-  if (selectedModel && !currentModel?.includes(selectedModel)) {
-    statusEl.textContent = 'Saved (CEO model applies on next restart)';
-    statusEl.style.color = 'var(--amber)';
+function renderReports() {
+  const today = todayIso();
+  const done = state.tickets.filter((t) => t.status === 'done' && (t.updated_at || '').startsWith(today));
+  const released = state.tickets.filter((t) => t.status === 'released' && (t.released_at || t.updated_at || '').startsWith(today));
+  const triage = state.tickets.filter((t) => t.status === 'triage');
+  const ul = $('#report-summary');
+  ul.innerHTML = '';
+  for (const [label, count] of [
+    ['Done today', done.length],
+    ['Released today', released.length],
+    ['Currently triaging', triage.length],
+    ['Tracked tickets total', state.tickets.length],
+  ]) {
+    const li = document.createElement('li');
+    li.innerHTML = `<b>${count}</b> &nbsp; ${label}`;
+    li.style.padding = '8px 0';
+    li.style.borderBottom = '1px dashed var(--border)';
+    ul.appendChild(li);
   }
-
-  settingsLoaded = false; // refresh on next poll
-  setTimeout(() => { statusEl.textContent = ''; }, 4000);
 }
 
-// ─── Skills ───
+// ─── Side panel ───
 
-let skillsCache = null;
-
-async function loadSkills() {
+async function openTicket(id) {
+  state.selectedTicketId = id;
+  const panel = $('#side-panel');
+  panel.classList.remove('hidden');
+  $('#side-body').textContent = 'Loading…';
   try {
-    const skills = await fetch('/api/skills').then(r => r.json());
-    skillsCache = skills;
-    renderSkills(skills);
-  } catch { /* ignore */ }
+    const r = await fetch(`/api/board/tickets/${id}`).then((r) => r.json());
+    const t = r.ticket;
+    $('#side-id').textContent = t.ticket_human_id;
+    $('#side-status').textContent = t.status.replace('_', ' ');
+    $('#side-status').className = 'status-pill ' + t.status;
+    $('#side-body').innerHTML = renderTicketDetail(t, r.audit || []);
+  } catch (err) {
+    $('#side-body').textContent = 'Failed to load: ' + (err.message || err);
+  }
 }
 
-function renderSkills(skills) {
-  const container = document.getElementById('skills-list');
-  if (!skills || skills.length === 0) {
-    container.innerHTML = '<div style="grid-column: 1/-1; padding: 8px 0; font-size: 13px; color: var(--text-muted);">No skills found</div>';
-    return;
-  }
+function closeSidePanel() {
+  $('#side-panel').classList.add('hidden');
+  state.selectedTicketId = null;
+}
 
-  container.innerHTML = skills.map(s => `
-    <div class="skill-card" data-skill="${escapeHtml(s.name)}">
-      <div style="font-weight: 500; font-size: 13px;">${escapeHtml(s.name)}</div>
-      <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">${escapeHtml(s.description)}</div>
-      <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">
-        ${escapeHtml(s.mode)} ${s.workers ? '(' + s.workers.length + ' workers)' : ''} ${s.workerModel ? '[' + s.workerModel + ']' : ''}
-      </div>
+function renderTicketDetail(t, audit) {
+  const refs = (() => { try { return JSON.parse(t.references_json || '[]'); } catch { return []; } })();
+  const refList = refs.length ? `<h4>References</h4><ul>${refs.map((r) => `<li>${escapeHtml(typeof r === 'string' ? r : JSON.stringify(r))}</li>`).join('')}</ul>` : '';
+  const recent = (t.recent_comments || []).slice().reverse();
+  const comments = recent.map((c) => `
+    <div class="comment">
+      <div class="who">${escapeHtml(c.author_label || c.author_kind)} · ${formatTime(c.created_at)}</div>
+      ${escapeHtml(c.body_md)}
     </div>
   `).join('');
-
-  container.querySelectorAll('.skill-card').forEach(card => {
-    card.addEventListener('click', () => {
-      const name = card.getAttribute('data-skill');
-      const skill = skills.find(s => s.name === name);
-      if (skill) showSkillConfig(skill);
-    });
-  });
-}
-
-function showSkillConfig(skill) {
-  const card = document.getElementById('skill-config-card');
-  const form = document.getElementById('skill-config-form');
-  card.style.display = 'block';
-
-  const fields = skill.configFields || [];
-  let html = `<div style="font-size: 13px; margin-bottom: 10px;"><strong>${escapeHtml(skill.name)}</strong> - ${escapeHtml(skill.description)}</div>`;
-
-  if (fields.length > 0) {
-    html += '<div class="settings-grid">';
-    for (const field of fields) {
-      html += `<label>${escapeHtml(field.label)}<input type="text" id="skill-cfg-${escapeHtml(field.name)}" placeholder="${field.required ? 'Required' : 'Optional'}" style="padding:6px 8px;font-size:13px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);outline:none;font-family:var(--font-mono);color-scheme:dark;"></label>`;
-    }
-    html += '</div>';
-  } else {
-    html += '<div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">No configuration needed.</div>';
-  }
-
-  html += '<div style="margin-top: 10px;"><button class="btn btn-accent" id="run-skill-btn">Run Skill</button> <span id="skill-run-status" style="font-size: 12px;"></span></div>';
-  form.innerHTML = html;
-
-  document.getElementById('run-skill-btn').addEventListener('click', async () => {
-    const cfg = {};
-    for (const field of fields) {
-      const val = document.getElementById('skill-cfg-' + field.name)?.value;
-      if (val) cfg[field.name] = val;
-    }
-
-    const statusEl = document.getElementById('skill-run-status');
-    statusEl.textContent = 'Running...';
-    statusEl.style.color = 'var(--amber)';
-
-    try {
-      const result = await fetch('/api/skills/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skillName: skill.name, config: cfg }),
-      }).then(r => r.json());
-
-      if (result.status === 'failed') {
-        statusEl.textContent = 'Failed: ' + (result.error || 'Unknown');
-        statusEl.style.color = 'var(--red)';
-      } else {
-        statusEl.textContent = result.mode === 'multi-worker'
-          ? `Started - ${result.workerCount} tasks created`
-          : 'Started - check Tasks tab';
-        statusEl.style.color = 'var(--green)';
-      }
-    } catch (err) {
-      statusEl.textContent = 'Error';
-      statusEl.style.color = 'var(--red)';
-    }
-  });
-}
-
-// ─── Sleep Screen ───
-
-function showSleepScreen() {
-  stopped = true;
-  hideBanner();
-
-  // Stop polling
-  if (statusIntervalId) { clearInterval(statusIntervalId); statusIntervalId = null; }
-
-  // Disable header buttons
-  document.getElementById('pause-btn').disabled = true;
-  document.getElementById('stop-btn').disabled = true;
-
-  // Dispose all worker terminals
-  for (const [id, w] of Object.entries(workerTerminals)) {
-    w.terminal.dispose();
-    w.container.remove();
-    document.getElementById(`pill-${id}`)?.remove();
-  }
-  workerTerminals = {};
-
-  // Hide all tabs and show sleep overlay
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  document.querySelector('.tabs').style.display = 'none';
-  document.querySelector('.prompt-bar').style.display = 'none';
-
-  // Create sleep overlay
-  const overlay = document.createElement('div');
-  overlay.id = 'sleep-screen';
-  overlay.style.cssText = `
-    flex: 1; display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 16px; color: var(--text-muted);
-    font-size: 14px; background: var(--bg-primary);
-  `;
-  const restartCmd = `npm run dev -- --project ${currentProjectPath || '/path/to/project'}`;
-  overlay.innerHTML = `
-    <div style="font-size: 32px; font-weight: 600; color: var(--text-secondary); font-family: var(--font-mono);">Yunomia</div>
-    <div style="color: var(--text-muted);">Session ended. All agents stopped.</div>
-    <div style="margin-top: 12px; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);">Restart with:</div>
-    <div style="margin-top: 4px; display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 13px; color: var(--accent); padding: 8px 16px; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border);">
-      <span style="user-select: all;">${escapeHtml(restartCmd)}</span>
-      <span id="copy-btn" style="cursor: pointer; opacity: 0.6; font-size: 16px;" title="Copy to clipboard">&#x2398;</span>
+  return `
+    <h2 style="margin:0 0 8px">${escapeHtml(t.title)}</h2>
+    <div style="font-size:12px;color:var(--text-mid);margin-bottom:14px">
+      ${t.assignee_agent ? AGENT_EMOJI[t.assignee_agent] + ' ' + t.assignee_agent : 'Unassigned'} ·
+      ${t.audience} · ${t.type}
+    </div>
+    <pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:8px">${escapeHtml(t.body_md || '')}</pre>
+    ${refList}
+    <div class="comments">
+      <h4>Recent comments (${recent.length})</h4>
+      ${comments || '<div style="color:var(--text-low);font-size:12px">No comments yet.</div>'}
     </div>
   `;
+}
 
-  // Insert overlay into DOM FIRST, then attach event listener
-  const statusBar = document.querySelector('.status-bar');
-  statusBar.parentNode.insertBefore(overlay, statusBar);
-
-  // Now the copy button exists in the DOM
-  const copyBtn = document.getElementById('copy-btn');
-  if (copyBtn) {
-    copyBtn.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(restartCmd);
-        copyBtn.textContent = '\u2713';
-        copyBtn.style.opacity = '1';
-        copyBtn.style.color = '#22c55e';
-        setTimeout(() => {
-          copyBtn.textContent = '\u2398';
-          copyBtn.style.opacity = '0.6';
-          copyBtn.style.color = '';
-        }, 2000);
-      } catch { /* clipboard API may fail */ }
-    });
+async function copyPromptForSelected() {
+  if (!state.selectedTicketId) return;
+  try {
+    const r = await fetch(`/api/copy-prompt/${state.selectedTicketId}`).then((r) => r.json());
+    await navigator.clipboard.writeText(r.prompt || '');
+    toast('Prompt copied to clipboard', 'success');
+  } catch (err) {
+    toast('Copy failed: ' + (err.message || err), 'error');
   }
-
-  // Update status bar
-  const dot = document.getElementById('ceo-dot');
-  const state = document.getElementById('ceo-state');
-  dot.className = 'dot stopped';
-  state.textContent = 'Stopped';
-  document.getElementById('status-bar').className = 'status-bar';
 }
 
-// ─── Tabs ───
-
-function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  const activeTab = document.querySelector(`[data-tab="${tab}"]`);
-  activeTab.classList.add('active');
-  activeTab.setAttribute('aria-selected', 'true');
-  document.getElementById(`tab-${tab}`).classList.add('active');
-
-  if (tab === 'terminals') {
-    requestAnimationFrame(() => {
-      if (activeTerminal === 'ceo' && ceoFitAddon) ceoFitAddon.fit();
-      else if (workerTerminals[activeTerminal]?.fitAddon) workerTerminals[activeTerminal].fitAddon.fit();
-    });
+async function transitionSelected(action) {
+  if (!state.selectedTicketId) return;
+  try {
+    const r = await fetch(`/api/board/tickets/${state.selectedTicketId}/${action}`, { method: 'POST' });
+    if (!r.ok) throw new Error(`${action} ${r.status}`);
+    toast(`Moved to ${action}`, 'success');
+    await openTicket(state.selectedTicketId);
+    refreshBoard();
+  } catch (err) {
+    toast(String(err.message || err), 'error');
   }
-
-  if (tab === 'status') { refreshStatus(); loadProjectTotal(); loadProject(); loadSoulGoals(); }
-  if (tab === 'skills' && !skillsCache) loadSkills();
 }
 
-// ─── Banner ───
-
-function showBanner(text, type) {
-  const banner = document.getElementById('banner');
-  banner.textContent = text; // textContent, not innerHTML - safe
-  banner.className = 'banner visible';
-  if (type === 'warning') banner.classList.add('warning');
-  if (type === 'danger') banner.classList.add('danger');
+async function openSoul(code) {
+  const panel = $('#side-panel');
+  panel.classList.remove('hidden');
+  $('#side-id').textContent = code;
+  $('#side-status').textContent = 'soul';
+  $('#side-status').className = 'status-pill';
+  $('#side-body').textContent = 'Loading…';
+  try {
+    const r = await fetch(`/api/agents/${code}/soul`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      $('#side-body').innerHTML = `<div style="color:var(--text-mid)">${escapeHtml(err.error || 'Soul file not available yet.')}</div>`;
+      return;
+    }
+    const md = await r.text();
+    $('#side-body').innerHTML = `<pre style="white-space:pre-wrap">${escapeHtml(md)}</pre>`;
+  } catch (err) {
+    $('#side-body').textContent = 'Failed: ' + (err.message || err);
+  }
 }
 
-function hideBanner() {
-  document.getElementById('banner').className = 'banner';
+// ─── Drop a Note ───
+
+const noteAttachments = [];
+
+async function submitNote() {
+  const body = $('#note-body').value.trim();
+  if (!body) { toast('Add a note first', 'error'); return; }
+  let composedBody = body;
+  if (noteAttachments.length) {
+    composedBody += '\n\n---\nAttachments:\n' + noteAttachments.map((a, i) => `- screenshot-${i + 1}.${a.ext} (${Math.round(a.size / 1024)}KB) — image data attached locally; re-attach if relayed`).join('\n');
+  }
+  try {
+    const r = await fetch('/api/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: $('#note-title').value.trim(),
+        body: composedBody,
+        audience: $('#note-audience').value,
+        type: $('#note-type').value,
+      }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || `note ${r.status}`);
+    }
+    const data = await r.json();
+    toast(`Created ${data.ticket?.ticket_human_id || 'ticket'}`, 'success');
+    $('#note-title').value = '';
+    $('#note-body').value = '';
+    noteAttachments.length = 0;
+    renderAttachments();
+    refreshBoard();
+  } catch (err) {
+    toast(String(err.message || err), 'error');
+  }
+}
+
+function handleFileAttach(e) {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  attachFile(f);
+  e.target.value = '';
+}
+async function attachFile(file) {
+  const data = await fileToBase64(file);
+  noteAttachments.push({ name: file.name, ext: (file.name.split('.').pop() || 'png').toLowerCase(), size: file.size, data });
+  renderAttachments();
+}
+function renderAttachments() {
+  const div = $('#note-attachments');
+  div.innerHTML = '';
+  noteAttachments.forEach((a, idx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'att';
+    wrap.innerHTML = `<img class="thumb" src="${a.data}" alt="${a.name}" /><button class="x" type="button" data-idx="${idx}">×</button>`;
+    wrap.querySelector('.x').addEventListener('click', () => { noteAttachments.splice(idx, 1); renderAttachments(); });
+    div.appendChild(wrap);
+  });
+}
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+function handlePaste(e) {
+  const items = e.clipboardData?.items || [];
+  for (const it of items) {
+    if (it.type && it.type.startsWith('image/')) {
+      const f = it.getAsFile();
+      if (f) attachFile(f);
+    }
+  }
+}
+function handleDrop(e) {
+  e.preventDefault();
+  const files = e.dataTransfer?.files || [];
+  for (const f of files) if (f.type.startsWith('image/')) attachFile(f);
+}
+
+// ─── Voice (Web Speech API) ───
+
+let recog = null;
+let recogActive = false;
+function toggleVoice() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { toast('Speech recognition not supported in this browser', 'error'); return; }
+  if (recogActive) { recog && recog.stop(); return; }
+  recog = new SR();
+  recog.continuous = true;
+  recog.interimResults = true;
+  recog.lang = 'en-GB';
+  let baseline = $('#note-body').value;
+  recog.onresult = (e) => {
+    let interim = '', finalText = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += t; else interim += t;
+    }
+    if (finalText) baseline = (baseline + ' ' + finalText).trim();
+    $('#note-body').value = (baseline + (interim ? ' ' + interim : '')).trimStart();
+  };
+  recog.onerror = (e) => { toast('Voice: ' + e.error, 'error'); recogActive = false; $('#btn-voice').classList.remove('btn-voice-on'); };
+  recog.onend = () => { recogActive = false; $('#btn-voice').classList.remove('btn-voice-on'); };
+  recog.start();
+  recogActive = true;
+  $('#btn-voice').classList.add('btn-voice-on');
 }
 
 // ─── Helpers ───
 
-function setConnectionStatus(status) {
-  const bar = document.getElementById('status-bar');
-  const existing = document.getElementById('connection-indicator');
-  if (existing) existing.remove();
-
-  if (status === 'offline') {
-    const indicator = document.createElement('span');
-    indicator.id = 'connection-indicator';
-    indicator.style.cssText = 'color: var(--red); font-weight: 600;';
-    indicator.textContent = 'OFFLINE';
-    bar.prepend(indicator);
-  }
+function toast(text, kind = 'info') {
+  const t = document.createElement('div');
+  t.className = `toast ${kind}`;
+  t.textContent = text;
+  $('#toasts').appendChild(t);
+  setTimeout(() => t.remove(), 4500);
 }
-
-function timeStamp() {
-  const now = new Date();
-  return now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+function formatTime(iso) {
+  try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); } catch { return iso; }
 }
-
-// ─── Init ───
-
-let statusIntervalId = null;
-let currentProjectPath = '';
-let activeAgentCosts = {}; // agentId -> costUsd
-
-// ─── Onboarding ───
-
-async function checkOnboarding() {
-  try {
-    const data = await fetch('/api/onboarding').then(r => r.json());
-    if (data.needsOnboarding) {
-      showOnboarding(data);
-      return true;
-    }
-  } catch { /* server not ready yet */ }
-  return false;
+function todayIso() { return new Date().toISOString().slice(0, 10); }
+function debounce(fn, ms) {
+  let t = null;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
-
-function showOnboarding(data) {
-  document.getElementById('onboarding-screen').style.display = 'flex';
-
-  // Set project name from path
-  document.getElementById('ob-name').value = data.projectName || '';
-
-  // Populate preset dropdown
-  const presetSelect = document.getElementById('ob-preset');
-  presetSelect.innerHTML = '';
-  for (const p of (data.presets || [])) {
-    const opt = document.createElement('option');
-    opt.value = p.name;
-    opt.textContent = `${p.name} - ${p.description || ''}`;
-    presetSelect.appendChild(opt);
-  }
-
-  // Set model
-  if (data.currentModel) {
-    document.getElementById('ob-model').value = data.currentModel;
-  }
-}
-
-async function submitOnboarding() {
-  const name = document.getElementById('ob-name').value.trim();
-  if (!name) { alert('Project name is required'); return; }
-
-  const body = {
-    projectName: name,
-    mission: document.getElementById('ob-mission').value,
-    goals: document.getElementById('ob-goals').value,
-    preset: document.getElementById('ob-preset').value,
-    model: document.getElementById('ob-model').value,
-  };
-
-  try {
-    const res = await fetch('/api/onboarding', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-      alert('Setup failed: ' + (err.error || res.statusText));
-      return;
-    }
-    document.getElementById('onboarding-screen').style.display = 'none';
-    location.reload();
-  } catch (err) {
-    alert('Connection failed. Is the server running?');
-  }
-}
-
-// ─── SOUL / GOALS Editors ───
-
-let soulLoaded = false;
-let goalsLoaded = false;
-let projectLoaded = false;
-let totalLoaded = false;
-
-async function loadProjectTotal() {
-  if (!totalLoaded) {
-    try {
-      const total = await fetch('/api/metrics/total').then(r => r.json());
-      const el = document.getElementById('project-total-rows');
-      if (el) {
-        el.innerHTML = `
-          ${statusRow('Total Cost', '$' + (total.totalCostUsd || 0).toFixed(2), total.totalCostUsd > 20 ? 'amber' : '')}
-          ${statusRow('Tasks Completed', String(total.tasksCompleted || 0), 'green')}
-          ${statusRow('Tasks Failed', String(total.tasksFailed || 0), total.tasksFailed > 0 ? 'red' : '')}
-          ${statusRow('Workers Spawned', String(total.workersSpawned || 0))}
-          ${statusRow('Sessions', String(total.sessions || 0))}
-        `;
-      }
-      totalLoaded = true;
-    } catch { /* ignore */ }
-  }
-}
-
-async function loadProject() {
-  if (!projectLoaded) {
-    try {
-      const content = await fetch('/api/project').then(r => r.text());
-      document.getElementById('project-editor').value = content;
-      projectLoaded = true;
-    } catch { /* ignore */ }
-  }
-}
-
-async function saveProject() {
-  const content = document.getElementById('project-editor').value;
-  if (!content.trim() && !confirm('PROJECT.md will be empty. Are you sure?')) return;
-  const statusEl = document.getElementById('project-save-status');
-  await fetch('/api/project', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  });
-  statusEl.textContent = 'Saved';
-  statusEl.style.color = 'var(--green)';
-  setTimeout(() => { statusEl.textContent = ''; }, 3000);
-}
-
-async function loadSoulGoals() {
-  if (!soulLoaded) {
-    try {
-      const soul = await fetch('/api/ceo/soul').then(r => r.text());
-      document.getElementById('soul-editor').value = soul;
-      soulLoaded = true;
-    } catch { /* ignore */ }
-  }
-  if (!goalsLoaded) {
-    try {
-      const goals = await fetch('/api/ceo/goals').then(r => r.text());
-      document.getElementById('goals-editor').value = goals;
-      goalsLoaded = true;
-    } catch { /* ignore */ }
-  }
-}
-
-async function saveSoul() {
-  const content = document.getElementById('soul-editor').value;
-  if (!content.trim() && !confirm('SOUL.md will be empty. Are you sure?')) return;
-  const statusEl = document.getElementById('soul-save-status');
-  await fetch('/api/ceo/soul', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  });
-  statusEl.textContent = 'Saved';
-  statusEl.style.color = 'var(--green)';
-  setTimeout(() => { statusEl.textContent = ''; }, 3000);
-}
-
-async function saveGoals() {
-  const content = document.getElementById('goals-editor').value;
-  if (!content.trim() && !confirm('GOALS.md will be empty. Are you sure?')) return;
-  const statusEl = document.getElementById('goals-save-status');
-  await fetch('/api/ceo/goals', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  });
-  statusEl.textContent = 'Saved';
-  statusEl.style.color = 'var(--green)';
-  setTimeout(() => { statusEl.textContent = ''; }, 3000);
-}
-
-// ─── Init ───
-
-document.addEventListener('DOMContentLoaded', async () => {
-  // Check onboarding first
-  const needsOnboarding = await checkOnboarding();
-  if (needsOnboarding) return; // Don't init anything else until onboarding completes
-
-  initTerminals();
-  initPromptInput();
-  connectWs();
-
-  // Browser online/offline detection
-  window.addEventListener('offline', () => {
-    setConnectionStatus('offline');
-    showBanner('Network offline', 'danger');
-  });
-  window.addEventListener('online', () => {
-    setConnectionStatus('online');
-    showBanner('Network restored', 'info');
-    setTimeout(() => hideBanner(), 2000);
-    if (!ws || ws.readyState !== WebSocket.OPEN) connectWs();
-  });
-
-  statusIntervalId = setInterval(() => {
-    refreshStatus();
-    // Refresh tasks + agent costs as a fallback
-    Promise.all([
-      fetch('/api/tasks').then(r => r.json()).catch(() => null),
-      fetch('/api/agents').then(r => r.json()).catch(() => []),
-    ]).then(([tasksData, agents]) => {
-      // Build cost map from active workers
-      activeAgentCosts = {};
-      if (Array.isArray(agents)) {
-        for (const a of agents) {
-          if (a.role === 'worker' && a.info?.costUsd) {
-            activeAgentCosts[a.id] = a.info.costUsd;
-          }
-        }
-      }
-      if (tasksData) renderTasks(tasksData);
-    });
-  }, 5000);
-  refreshStatus();
-});

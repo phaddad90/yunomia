@@ -1,282 +1,92 @@
-# Yunomia
+# PrintPepper Mission Control
 
-```
- ██╗   ██╗██╗   ██╗███╗   ██╗ ██████╗ ███╗   ███╗██╗ █████╗
- ╚██╗ ██╔╝██║   ██║████╗  ██║██╔═══██╗████╗ ████║██║██╔══██╗
-  ╚████╔╝ ██║   ██║██╔██╗ ██║██║   ██║██╔████╔██║██║███████║
-   ╚██╔╝  ██║   ██║██║╚██╗██║██║   ██║██║╚██╔╝██║██║██╔══██║
-    ██║   ╚██████╔╝██║ ╚████║╚██████╔╝██║ ╚═╝ ██║██║██║  ██║
-    ╚═╝    ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝ ╚═╝     ╚═╝╚═╝╚═╝  ╚═╝
-```
+> Local browser command room for the PrintPepper AI agent fleet.
 
-> *One brain. Many hands. No waste.*
+A lean Express + WebSocket app that mounts at `http://localhost:4600`, reads the live `/admin/board` state, and gives Peter (CEO) a single-pane view of the seven-agent fleet — without manual terminal-relay between sessions.
 
-A lean, browser-based command centre that runs a team of Claude Code agents from your terminal. One CEO thinks. Temporary workers execute. Everything streams live to `localhost:4600`. You stay in control.
+## What it does (v0.1)
 
----
+- Live Kanban mirror of `https://admin.printpepper.co.uk/admin/board`, updated via WebSocket and an audit-poll fallback.
+- Six agent cards (SA, AD, WA, DA, QA, WD) with traffic-light status (⚫ idle · 🟡 standby · 🟢 running · 🔴 blocked) derived from current ticket assignments.
+- **Drop a Note** panel: text + voice (Web Speech API) + screenshot drop zone → posts a fresh `triage` ticket to the CEO inbox in seconds.
+- **Copy prompt** button on any ticket — clipboard gets the relay one-liner that pastes straight into an agent terminal.
+- Side panel: full ticket body, references, recent comments, fast `start`/`handoff`/`done` transitions.
+- Today's stats, deploy bundle preview, daily report tab.
 
-## The idea
+## Hard constraints
 
-We started with a question: *why does multi-agent AI orchestration burn through token limits in minutes?*
+- **Zero calls to `api.anthropic.com`.** Mission Control runs on Peter's Claude Code subscription only — no per-token billing. All upstream traffic goes to `https://admin.printpepper.co.uk/api/admin/*` via the agent-token auth pattern (`x-pp-agent-token` + `x-pp-agent-id`).
+- Server binds `127.0.0.1` only. No `0.0.0.0`. No remote exposure.
+- No database. State lives in PrintPepper's platform DB; Mission Control is read-through with a thin write layer for notes and transitions.
+- No subagent spawning. Peter opens his six agent terminals; Mission Control is the dashboard, not a session manager.
+- Light mode only. Zinc + pepper-red accents. No dark mode, no purples, no greens (except the status check).
 
-We dug into the leading orchestrators. Read the GitHub issues, the Reddit complaints, the source code. Found three root causes:
-
-1. **Session accumulation.** Every heartbeat resumes the full conversation history. By heartbeat 10, you're carrying millions of tokens of stale context.
-2. **Skill file bloat.** Tens of thousands of tokens of instruction files and tool definitions loaded on every cycle, even when the agent needs 10% of them.
-3. **No memory, just re-briefing.** Agents don't learn. They get told everything, every time.
-
-So we asked: *what if agents were employees, not contractors?*
-
-Contractors need a full brief every engagement. Employees build institutional knowledge. They have a role (SOUL.md), targets (GOALS.md), and working memory (MEMORY.md). They read files when they need context instead of being force-fed everything on every turn.
-
-The result:
-
-- **CEO persists.** One long-running session with auto-compaction. Context lives in files, not in bloated conversation history.
-- **Workers are disposable.** Spawned for one task, scoped to one directory, killed on completion. Clean context every time.
-- **7 tools, not 240.** ~600 tokens of tool overhead per turn.
-- **TASKS.md is the board.** No database. A markdown file both human and AI read natively.
-- **Safety is not optional.** 13 guardrails enforced at the SDK level, not by polite instructions in a prompt.
-
----
-
-## Get running
-
-**Prerequisites:** Node.js 22+, [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated.
+## Run it
 
 ```bash
-git clone https://github.com/phaddad90/yunomia.git
-cd yunomia/app
+cd app
 npm install
-npm run dev -- --project /path/to/your/code
+export AGENT_API_TOKEN=<32-byte hex token>     # provisioned by SA
+export PP_AGENT_CODE=TA                         # default; falls back to TA
+npm run dev
 ```
 
-Open **http://localhost:4600**. Yunomia scans your project, generates context files, and starts the CEO. You'll see the terminal streaming within seconds.
+Open `http://localhost:4600`.
 
-| Option | Default |
-|--------|---------|
-| `--project <path>` | required |
-| `--port <number>` | 4600 |
-| `--model <name>` | claude-sonnet-4-6 |
+| Env var               | Default                                  | What it does                                        |
+|-----------------------|------------------------------------------|-----------------------------------------------------|
+| `AGENT_API_TOKEN`     | (required)                               | Agent service token. Never commit.                  |
+| `PP_AGENT_CODE`       | `TA`                                     | Identifies who Mission Control authenticates as.    |
+| `PP_API_BASE`         | `https://admin.printpepper.co.uk`        | PrintPepper API base.                               |
+| `PP_AUDIT_POLL_MS`    | `8000`                                   | Audit poll cadence.                                 |
+| `PP_WEBHOOK_SECRET`   | _(unset → webhook receiver disabled)_    | HMAC secret for `POST /webhook/board-event`.        |
 
-### Updating
+`AGENT_API_TOKEN` may also be supplied via a local `mission-control.config.json` next to where you run the server. **Don't commit that file.**
 
-```bash
-cd yunomia
-git pull
-cd app && npm install
-```
-
-Then restart the server. Your project data (TASKS.md, SOUL.md, MEMORY.md, metrics) is stored in your project folder, not in the Yunomia repo - updates are non-destructive.
-
----
-
-## How it works
-
-You point Yunomia at a project folder. It spins up a CEO agent in your browser. The CEO reads its soul and goals, checks the task board, and starts planning.
-
-When something needs building, it spawns a temporary worker - a separate Claude Code session sandboxed to its own directory. The worker does the job and dies. The CEO reviews the output, updates the board, and moves on.
-
-You watch it all live in a dashboard with live terminals, task tracking, and cost breakdowns. Prompt the CEO by typing, voice dictation, or dropping in screenshots. Schedule tasks for later. Pause when you walk away. Kill workers that go sideways. Every message is timestamped.
+## How it talks to PrintPepper
 
 ```
-                    ┌─────────────────────────────────┐
-                    │     localhost:4600 (browser)     │
-                    │                                  │
-                    │  Terminals │ Tasks │ Status       │
-                    │  ┌──────────────────────────┐   │
-                    │  │  > You: build the API     │   │
-                    │  │  CEO: On it. Spawning...  │   │
-                    │  └──────────────────────────┘   │
-                    │  [$4.20 today]  [Pause]  [Stop]  │
-                    └──────────────┬──────────────────┘
-                                   │
-                    ┌──────────────┴──────────────────┐
-                    │        Yunomia Server            │
-                    │                                  │
-                    │  agent-adapter ── SDK wrapper     │
-                    │    ├── CEO (persistent session)   │
-                    │    └── Workers (spawn & kill)     │
-                    │                                  │
-                    │  tasks ────── TASKS.md cache      │
-                    │  mcp-server ─ 7 tools for CEO    │
-                    │  heartbeat ── adaptive (10m-60m)  │
-                    │  safety ───── 13 SDK guardrails   │
-                    │  metrics ──── analytics + reports │
-                    └──────────────┬──────────────────┘
-                                   │
-                    ┌──────────────┴──────────────────┐
-                    │         Your Project             │
-                    │                                  │
-                    │  PROJECT.md ── the mission        │
-                    │  TASKS.md ──── the board          │
-                    │  ceo/                             │
-                    │    ├── SOUL.md ── who it is       │
-                    │    ├── GOALS.md ─ what it targets │
-                    │    └── MEMORY.md  what it learned │
-                    │  workers/                         │
-                    │    └── task-042/                  │
-                    │         └── output/ ── the work   │
-                    └─────────────────────────────────┘
+browser  ──ws──▶  Mission Control (localhost:4600)  ──https──▶  admin.printpepper.co.uk
+                            │
+                            └── audit poll (every 8s) → broadcast deltas → browser re-renders
 ```
 
-**The CEO loop:** Check the board. Plan. Delegate. Review. Write lessons. The heartbeat starts at 10 minutes, doubles after 3 idle cycles, caps at 60 minutes, resets instantly when work arrives.
+Two delta sources, in order of preference:
 
-**The human loop:** Watch the terminal. Prompt when needed - type, dictate via voice, or drop in screenshots. Schedule tasks for later. Walk away - the inactivity pause stops spending after 60 minutes. Come back, hit resume, carry on.
+1. **Webhooks** (`POST /webhook/board-event`, HMAC-validated). Reachable only when you tunnel (e.g. ngrok) since the webhook fires from prod.
+2. **Audit poll** (server-side, never browser-side) → `GET /api/admin/audit?since=<ts>` every 8s. Always-on fallback.
 
----
+Browser ↔ server traffic is over a single WebSocket so the dashboard re-renders within a poll cycle of any prod-side change.
 
-## Built for humans, not just agents
-
-Most agent tools treat the UI as an afterthought - a log viewer bolted onto an API. We think the interface is the product. If you're trusting AI to manage your codebase, you need to see what it's doing, intervene naturally, and never feel like you're fighting the tool.
-
-That's why Yunomia has native voice input (no external service - Web Speech API runs locally), image attachments via drag-and-drop (paste a screenshot of a bug, the CEO sees it), multi-line prompts with Shift+Enter, message timestamps, live running cost per task, a network status indicator, and an onboarding wizard that gets you from zero to running without touching a config file.
-
-The Status tab gives you inline editors for PROJECT.md, SOUL.md, and GOALS.md - edit your agent's personality and targets without leaving the dashboard. A running project total shows lifetime cost across all sessions.
-
-Every interaction was designed around one question: what would make this feel like a tool you actually want open all day?
-
----
-
-## Safety
-
-Thirteen guardrails. All SDK-enforced. Not prompt-based suggestions.
-
-| Guard | What happens | Default |
-|-------|-------------|---------|
-| Concurrency cap | Rejects spawn if at limit | 3 workers |
-| Daily budget | Warns at 80%, hard stops at 100% | $50/day |
-| Stall detection | Nudge at 2min, kill at 5min silence | Always on |
-| Hard timeout | Kills worker regardless of activity | 15 min |
-| Retry limit | Marks task failed, needs human | 2 retries |
-| Inactivity pause | Pauses heartbeat when you're away | 60 min |
-| Working hours | Pauses outside hours, auto-resumes | Off |
-| Write isolation | Blocks Write/Edit outside worker dir | Always on |
-| Bash sandboxed | Workers can use Bash, dangerous commands blocked | Always on |
-| CEO file guard | CEO cannot modify its own SOUL.md or GOALS.md | Always on |
-| CEO session age | Saves memory, restarts fresh | 8 hours |
-| CEO crash recovery | Auto-restarts, notifies dashboard | Always on |
-| Spawn approval | Optional human approve/reject gate | Off |
-| Orphan cleanup | Marks stale tasks failed on restart | Always on |
-
-Workers are sandboxed at the SDK level: `disallowedTools: ['Bash']` plus a `canUseTool` path guard on every Write/Edit/MultiEdit that returns `{ behavior: 'deny' }` for anything outside the worker's folder.
-
-The CEO is also guarded - it cannot rewrite its own rules. Server binds to `127.0.0.1` only. Safety config updates are validated with type and range bounds.
-
----
-
-## Configuration
-
-Drop an `yunomia.config.json` in your project directory. Everything is optional - [see full config reference](docs/BRIEF.md#configuration).
-
-Key settings: `maxConcurrentWorkers` (1-10), `maxDailyBudgetUsd` (1-500), `heartbeatIntervalMinutes` (1-60), `requireApprovalForSpawn` (true/false), `workingHours` ({ start, end, timezone }).
-
----
-
-## Tuning your agents
-
-Edit these in your project's `ceo/` folder:
-
-**SOUL.md** - Who the CEO is. Keep under 50 lines. Human-written context outperforms AI-generated by ~7% in controlled studies.
-
-**GOALS.md** - KPIs and sprint targets. Update as your project evolves.
-
-**PROJECT.md** - Auto-generated on first run. Edit to add what the scanner missed.
-
----
-
-## Metrics
-
-Every event is tracked to date-partitioned `metrics/metrics-YYYY-MM-DD.jsonl`:
-
-- Heartbeat fired/skipped, with interval and token counts
-- Worker spawned/completed/killed, with model, duration, cost, success rate
-- Human interactions, cost milestones, CEO restarts, session summaries
-
-Daily reports auto-generate to `reports/YYYY-MM-DD.md` on shutdown. The CEO writes a "lessons learned" entry to MEMORY.md covering what worked and what to change.
+## Layout
 
 ```
-POST /api/daily-review      Trigger CEO lessons learned (no shutdown needed)
-GET  /api/metrics/summary   JSON summary of today's session
-GET  /api/metrics/report    Markdown daily report
+┌──────────────────── Mission Control ─────────────────────┐
+│ brand          [● live]                  [you are: 🛠 TA]│
+├──────────┬────────────────────────────────┬──────────────┤
+│ Agents   │  Board / Activity / My Inbox / │ Drop a Note  │
+│  🟧 SA   │  Reports                       │  text/voice  │
+│  🟦 AD   │                                │  screenshot  │
+│  🟪 WA   │  ┌─backlog─┬─triage─┬─assigned-┤              │
+│  🟨 DA   │  │ ticket  │ ticket │ ticket   │ CEO inbox    │
+│  🟥 QA   │  │ ticket  │        │          │  PH-037 …    │
+│  🌐 WD   │  └─────────┴────────┴──────────┘              │
+│ Today    │                                │              │
+│ Bundle   │                                │              │
+└──────────┴────────────────────────────────┴──────────────┘
 ```
-
----
-
-## Cost
-
-Honest numbers. Stress-tested.
-
-| Setup | Daily cost |
-|-------|-----------|
-| Opus CEO + Sonnet workers | $60 - $120 |
-| Sonnet CEO + Sonnet workers | $30 - $70 |
-| Sonnet CEO + Haiku workers | $20 - $50 |
-
-A single Claude Code session runs $5-15/day. Yunomia runs 4-6x that for multi-agent throughput.
-
----
 
 ## Tech
 
-5 runtime deps. 0 client-side deps. No React. No database.
-
 | | |
 |---|---|
-| Agent runtime | `@anthropic-ai/claude-agent-sdk` |
-| Server | Express 5 + ws |
-| Terminals | xterm.js via CDN |
-| Logs | pino |
+| Server | Express 5 + ws + pino |
+| Browser | Vanilla JS, no framework, no build step |
 | Build | tsx (dev), tsup (prod) |
+| Auth | `x-pp-agent-token` + `x-pp-agent-id` headers |
 
----
-
-## Status
-
-**Current version: v1.3.0** - fully functional, 6 rounds of red-team review (risk score 14/125), actively in use.
-
-## Roadmap
-
-**v1.1 - Sharper CEO** *shipped*
-- Context-aware heartbeat prompts (includes board state when tasks change)
-- Worker auto-completion (tasks marked done with cost data when workers finish)
-- Configurable cold-start prompt templates
-- Live running cost per active task in Tasks tab
-
-**v1.2 - Preset Agents + Skills** *shipped*
-- 7 CEO presets: Default, Branding, Website, App Dev, Copywriting, Architecture, Security
-- Preset selector at project init (`--preset branding`)
-- Skills framework: callable workflows with prompt templates and config
-- Built-in skills: Red Team, Security Scan, Code Review, Brand Audit, Content Review, Test Suite
-- CEO can invoke skills via MCP tool (`run_skill`)
-- Dashboard Skills tab with click-to-run cards
-
-**v1.3 - Smarter Workers + Deploy** *shipped*
-- Sandboxed Bash for workers (dangerous commands blocked, cwd scoped)
-- Task dependency chains (dependsOn field, CEO can chain tasks)
-- Worker-to-worker file handoff (dependency output copied to input/ dir)
-- Deploy skills: SSH and FTP with per-project config
-- Git auto-commit on successful worker completion
-
-**v2.0 - Better Visibility + Multi-project**
-- Historical cost graph on Status tab (last 7 days)
-- Worker success rate trends
-- Browser notifications on worker completion and safety alerts
-- Command palette in prompt input (`/pause`, `/status`, `/spawn`, `/skill red-team`)
-- Project switching in dashboard
-- Cross-project CEO memory
-
-**v3.0 - Team Mode**
-- Multiple humans, role-based access
-- Goal hierarchy with progress rollup
-- Confirmation mode (CEO proposes, human approves)
-- Remote deployment (run Yunomia on a server, access from anywhere)
-
----
+Five runtime deps. No React. No database. No SDK that bills tokens.
 
 ## License
 
 MIT
-
----
-
-Built by [Peter Haddad](https://github.com/phaddad90). Designed with Claude Opus 4.6. Six rounds of red-team review. Risk score: 14/125.

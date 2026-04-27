@@ -1,183 +1,90 @@
-// ─── Task Types ───
+// Mission Control types — mirrors PrintPepper /admin/board API contracts.
 
-export type TaskStatus = 'planned' | 'scheduled' | 'active' | 'done' | 'failed' | 'pulled';
-export type TaskPriority = 'low' | 'medium' | 'high' | 'critical';
-export type ModelChoice = 'opus' | 'sonnet' | 'haiku';
+export type TicketStatus =
+  | 'backlog'
+  | 'triage'
+  | 'assigned'
+  | 'in_progress'
+  | 'in_review'
+  | 'done'
+  | 'released';
 
-export interface Task {
+export type TicketType = 'bug' | 'feature' | 'doc' | 'gate' | 'migration' | 'ops';
+export type TicketAudience = 'app' | 'admin';
+export type AgentCode = 'SA' | 'AD' | 'WA' | 'DA' | 'QA' | 'WD' | 'CEO' | 'TA';
+
+export interface Ticket {
   id: string;
+  ticket_human_id: string;
+  type: TicketType;
+  status: TicketStatus;
   title: string;
-  description: string;
-  assignee: string | null;
-  status: TaskStatus;
-  priority: TaskPriority;
-  model: ModelChoice;
-  maxBudgetUsd: number;
-  retryCount: number;
-  maxRetries: number;
-  tags: string[];
-  created: string;
-  completed: string | null;
-  tokenCost: { input: number; output: number; totalUsd: number };
-  notes: string;
-  parentGoal?: string;
-  scheduledFor?: string; // ISO datetime - task moves to planned when time arrives
-  maxRuntimeMinutes?: number; // per-task timeout override
-  dependsOn?: string[]; // task IDs that must be done before this can be spawned
+  body_md: string;
+  assignee_agent: AgentCode | null;
+  audience: TicketAudience;
+  references_json?: string | null;
+  diagnostics_json?: string | null;
+  tenant_id?: string | null;
+  job_id?: string | null;
+  created_at: string;
+  updated_at: string;
+  released_at?: string | null;
+  recent_comments?: TicketComment[];
 }
 
-export interface TasksState {
-  tasks: Task[];
-  lastModified: string;
-}
-
-// ─── Agent Types ───
-
-export type AgentRole = 'ceo' | 'worker';
-export type AgentStatus = 'starting' | 'running' | 'idle' | 'stopping' | 'stopped' | 'crashed';
-export type CeoDisplayStatus = 'Thinking' | 'Waiting' | 'Paused' | 'Stalled';
-
-export interface SessionConfig {
-  model: string;
-  cwd: string;
-  additionalDirectories: string[];
-  mcpServers?: Record<string, unknown>;
-  permissionMode?: string;
-  allowedTools?: string[];
-  disallowedTools?: string[];
-  maxTurns?: number;
-  maxBudgetUsd?: number;
-  persistSession: boolean;
-  canUseTool?: (tool: string, input: Record<string, unknown>, options?: unknown) => Promise<{ behavior: string }>;
-  coldStartPrompt?: string;
-}
-
-export interface SessionInfo {
-  sessionId: string;
-  status: AgentStatus;
-  model: string;
-  tokensInput: number;
-  tokensOutput: number;
-  costUsd: number;
-  startedAt: string;
-  runtime: number; // ms
-}
-
-export interface AgentSession {
+export interface TicketComment {
   id: string;
-  role: AgentRole;
-  taskId?: string;
-  config: SessionConfig;
-  status: AgentStatus;
-  sessionId: string | null;
-  process: unknown; // SDK session handle
-  info: SessionInfo;
+  ticket_id: string;
+  body_md: string;
+  author_kind: 'admin' | 'agent';
+  author_id: string | null;
+  author_label: string;
+  created_at: string;
 }
 
-// ─── Safety Types ───
-
-export interface SafetyConfig {
-  maxConcurrentWorkers: number;
-  maxDailyBudgetUsd: number;
-  maxWorkerRuntimeMinutes: number;
-  maxRetries: number;
-  inactivityPauseMinutes: number;
-  heartbeatIntervalMinutes: number;
-  maxCeoSessionHours: number;
-  maxPlannedTasks: number;
-  stallNudgeMinutes: number;
-  stallKillMinutes: number;
-  hardTimeoutMinutes: number;
-  requireApprovalForSpawn: boolean;
-  workingHours?: {
-    start: string;
-    end: string;
-    timezone: string;
-  };
-}
-
-export const DEFAULT_SAFETY_CONFIG: SafetyConfig = {
-  maxConcurrentWorkers: 3,
-  maxDailyBudgetUsd: 50,
-  maxWorkerRuntimeMinutes: 60,
-  maxRetries: 2,
-  inactivityPauseMinutes: 60,
-  heartbeatIntervalMinutes: 10,
-  maxCeoSessionHours: 8,
-  maxPlannedTasks: 20,
-  stallNudgeMinutes: 2,
-  stallKillMinutes: 5,
-  hardTimeoutMinutes: 15,
-  requireApprovalForSpawn: false,
-};
-
-// ─── Server Types ───
-
-export interface YunomiaConfig {
-  port: number;
-  projectPath: string;
-  safety: SafetyConfig;
-  ceoModel: string;
-}
-
-export const DEFAULT_CONFIG: YunomiaConfig = {
-  port: 4600,
-  projectPath: '',
-  safety: DEFAULT_SAFETY_CONFIG,
-  ceoModel: 'claude-sonnet-4-6',
-};
-
-export interface HealthResponse {
-  version: string;
-  project: string;
-  status: 'ok' | 'degraded' | 'error';
-  uptime: number;
-  ceo: {
-    status: AgentStatus | 'not_started';
-    model: string;
-    sessionAge: string;
-    tokensToday: number;
-    costToday: number;
-  };
-  workers: {
-    active: number;
-    max: number;
-  };
-  budget: {
-    spent: number;
-    limit: number;
-    percent: number;
-  };
-  tasks: Record<TaskStatus, number>;
-  memory: {
-    rss: string;
-    heapUsed: string;
-  };
-}
-
-// ─── WebSocket Message Types ───
-
-export type WsMessageType =
-  | 'terminal_output'
-  | 'agent_status'
-  | 'tasks_updated'
-  | 'safety_alert'
-  | 'spawn_approval_request'
-  | 'cost_update';
-
-export interface WsMessage {
-  type: WsMessageType;
-  agentId?: string;
-  data: unknown;
-  timestamp: string;
-}
-
-// ─── Audit Types ───
-
-export interface AuditEntry {
-  timestamp: string;
-  actor: 'ceo' | 'human' | 'system';
+export interface AuditRow {
+  id: number;
+  actor_kind: string;
+  actor_id: string | null;
   action: string;
-  taskId?: string;
-  detail: string;
+  target: string | null;
+  details: Record<string, unknown> | null;
+  created_at: string;
 }
+
+export interface MissionConfig {
+  port: number;
+  apiBase: string;
+  agentToken: string;
+  agentCode: AgentCode;
+  webhookSecret?: string;
+  auditPollMs: number;
+}
+
+export type WsMessage =
+  | { type: 'hello'; data: { agentCode: AgentCode; serverTime: string } }
+  | { type: 'tickets_changed'; data: { reason: string } }
+  | { type: 'audit_event'; data: AuditRow }
+  | { type: 'agent_state'; data: AgentState[] }
+  | { type: 'toast'; data: { kind: 'info' | 'error' | 'success'; text: string } };
+
+export interface AgentState {
+  code: AgentCode;
+  emoji: string;
+  light: 'idle' | 'standby' | 'running' | 'blocked';
+  current?: { ticket_human_id: string; status: TicketStatus; title: string };
+  queueCount: number;
+}
+
+export const AGENT_EMOJI: Record<AgentCode, string> = {
+  SA: '🟧',
+  AD: '🟦',
+  WA: '🟪',
+  DA: '🟨',
+  QA: '🟥',
+  WD: '🌐',
+  CEO: '🎯',
+  TA: '🛠',
+};
+
+export const AGENT_LIST: AgentCode[] = ['SA', 'AD', 'WA', 'DA', 'QA', 'WD'];

@@ -1,241 +1,155 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Yunomia</title>
-  <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mission Control — PrintPepper</title>
+  <link rel="icon" href="/favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <!-- Onboarding (shown on first run only) -->
-  <div id="onboarding-screen" class="onboarding" style="display: none;">
-    <div class="onboarding-card">
-      <div style="font-size: 24px; font-weight: 600; font-family: var(--font-mono); margin-bottom: 4px;">Yunomia</div>
-      <div style="color: var(--text-muted); margin-bottom: 20px;">Set up your project</div>
-
-      <label>Project Name
-        <input type="text" id="ob-name" placeholder="My Project">
-      </label>
-
-      <label>Mission
-        <textarea id="ob-mission" rows="3" placeholder="What are you building and why? (1-2 sentences)"></textarea>
-      </label>
-
-      <label>Goals
-        <textarea id="ob-goals" rows="3" placeholder="- Goal 1&#10;- Goal 2&#10;- Goal 3"></textarea>
-      </label>
-
-      <label>CEO Preset
-        <select id="ob-preset"></select>
-      </label>
-
-      <label>CEO Model
-        <select id="ob-model">
-          <option value="claude-sonnet-4-6">Sonnet</option>
-          <option value="claude-opus-4-6">Opus</option>
-          <option value="claude-haiku-4-5-20251001">Haiku</option>
-        </select>
-      </label>
-
-      <button class="btn btn-accent" onclick="submitOnboarding()" style="margin-top: 12px; padding: 10px; font-size: 14px; width: 100%;">Start</button>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo-dot"></span>
+      <span class="brand-name">Mission Control</span>
+      <span class="brand-sub">PrintPepper</span>
     </div>
-  </div>
-
-  <!-- Banner -->
-  <div id="banner" class="banner" role="alert" aria-live="polite"></div>
-
-  <!-- Header -->
-  <div class="header">
-    <div class="header-left">
-      <span class="header-title">Yunomia</span>
-      <span class="header-project" id="project-name">-</span>
-      <span class="header-version" id="app-version"></span>
+    <div class="conn">
+      <span id="live-dot" class="live-dot" data-state="off"></span>
+      <span id="live-label" class="live-label">connecting…</span>
     </div>
-    <div class="header-right">
-      <span class="cost-badge" id="cost-badge">$0.00</span>
-      <button class="btn" id="pause-btn" onclick="togglePause()">Pause</button>
-      <button class="btn btn-danger" id="stop-btn" onclick="stopAll()">Stop</button>
+    <div class="who">
+      <span class="who-label">you are</span>
+      <span id="who-agent" class="who-agent">—</span>
     </div>
-  </div>
+  </header>
 
-  <!-- Tabs -->
-  <div class="tabs" role="tablist">
-    <div class="tab active" role="tab" tabindex="0" aria-selected="true" data-tab="terminals" onclick="switchTab('terminals')" onkeydown="if(event.key==='Enter')switchTab('terminals')">Terminals</div>
-    <div class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="tasks" onclick="switchTab('tasks')" onkeydown="if(event.key==='Enter')switchTab('tasks')">Tasks</div>
-    <div class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="skills" onclick="switchTab('skills')" onkeydown="if(event.key==='Enter')switchTab('skills')">Skills</div>
-    <div class="tab" role="tab" tabindex="0" aria-selected="false" data-tab="status" onclick="switchTab('status')" onkeydown="if(event.key==='Enter')switchTab('status')">Status</div>
-  </div>
+  <main class="layout">
+    <aside class="rail rail-left">
+      <section class="panel">
+        <h2 class="panel-title">Agents</h2>
+        <ul id="agent-list" class="agent-list"></ul>
+      </section>
 
-  <!-- Tab: Terminals -->
-  <div class="tab-content active" id="tab-terminals">
-    <div class="terminal-container">
-      <div class="terminal-main">
-        <div class="terminal-wrapper" id="terminal-ceo"></div>
-        <button class="btn terminal-back-btn" id="back-to-ceo" onclick="showCeoTerminal()">Back to CEO</button>
-      </div>
-      <div class="worker-bar" id="worker-bar">
-        <span style="color: var(--text-muted); font-size: 11px;">Workers:</span>
-      </div>
-    </div>
-  </div>
+      <section class="panel">
+        <h2 class="panel-title">Today</h2>
+        <ul id="stats" class="stats">
+          <li><span>Open</span><b id="stat-open">—</b></li>
+          <li><span>In review</span><b id="stat-review">—</b></li>
+          <li><span>Done today</span><b id="stat-done">—</b></li>
+          <li><span>Triage</span><b id="stat-triage">—</b></li>
+        </ul>
+      </section>
 
-  <!-- Tab: Tasks -->
-  <div class="tab-content" id="tab-tasks">
-    <div class="tasks-container" id="tasks-container"></div>
-    <div class="add-task-bar">
-      <input type="text" id="add-task-input" placeholder="New task title..." onkeydown="if(event.key==='Enter')addTask()">
-      <input type="datetime-local" id="add-task-schedule" title="Schedule for later (optional)">
-      <button class="btn btn-accent" onclick="addTask()">Add Task</button>
-    </div>
-  </div>
+      <section class="panel">
+        <h2 class="panel-title">Deploy bundle</h2>
+        <ul id="deploy-bundle" class="bundle"></ul>
+      </section>
+    </aside>
 
-  <!-- Tab: Skills -->
-  <div class="tab-content" id="tab-skills">
-    <div class="status-container">
-      <div class="status-card">
-        <div class="status-card-title">Available Skills</div>
-        <div id="skills-list" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-          <div style="padding: 4px 0; font-size: 13px; color: var(--text-muted);">Loading...</div>
-        </div>
-      </div>
-      <div class="status-card" id="skill-config-card" style="display: none;">
-        <div class="status-card-title">Configure Skill</div>
-        <div id="skill-config-form"></div>
-      </div>
-    </div>
-  </div>
+    <section class="main">
+      <nav class="tabs">
+        <button class="tab active" data-tab="board">Board</button>
+        <button class="tab" data-tab="activity">Activity</button>
+        <button class="tab" data-tab="inbox">My inbox</button>
+        <button class="tab" data-tab="reports">Reports</button>
+      </nav>
 
-  <!-- Tab: Status -->
-  <div class="tab-content" id="tab-status">
-    <div class="status-container" id="status-container">
-      <div class="status-card">
-        <div class="status-card-title">CEO Agent</div>
-        <div id="ceo-status-rows"></div>
-      </div>
-      <div class="status-card">
-        <div class="status-card-title">Workers</div>
-        <div id="worker-status-rows"></div>
-      </div>
-      <div class="status-card">
-        <div class="status-card-title">Cost Breakdown</div>
-        <div id="cost-status-rows"></div>
-      </div>
-      <div class="status-card">
-        <div class="status-card-title">Safety</div>
-        <div id="safety-status-rows"></div>
-      </div>
-      <div class="status-card">
-        <div class="status-card-title">Today's Metrics</div>
-        <div id="metrics-status-rows">
-          <div style="padding: 4px 0; font-size: 13px; color: var(--text-muted);">Loading...</div>
-        </div>
-      </div>
-      <div class="status-card">
-        <div class="status-card-title">Project Total</div>
-        <div id="project-total-rows">
-          <div style="padding: 4px 0; font-size: 13px; color: var(--text-muted);">Loading...</div>
-        </div>
-      </div>
-      <div class="status-card">
-        <div class="status-card-title">Project Brief</div>
-        <textarea id="project-editor" rows="10" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-family:var(--font-mono);font-size:12px;padding:8px;resize:vertical;color-scheme:dark;"></textarea>
-        <div style="margin-top:6px;display:flex;gap:8px;align-items:center;">
-          <button class="btn btn-accent" onclick="saveProject()">Save Project</button>
-          <span id="project-save-status" style="font-size:12px;"></span>
-        </div>
-      </div>
-      <div class="status-card">
-        <div class="status-card-title">CEO Soul</div>
-        <textarea id="soul-editor" rows="12" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-family:var(--font-mono);font-size:12px;padding:8px;resize:vertical;color-scheme:dark;"></textarea>
-        <div style="margin-top:6px;display:flex;gap:8px;align-items:center;">
-          <button class="btn btn-accent" onclick="saveSoul()">Save Soul</button>
-          <span id="soul-save-status" style="font-size:12px;"></span>
-        </div>
-      </div>
-      <div class="status-card">
-        <div class="status-card-title">CEO Goals</div>
-        <textarea id="goals-editor" rows="8" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-family:var(--font-mono);font-size:12px;padding:8px;resize:vertical;color-scheme:dark;"></textarea>
-        <div style="margin-top:6px;display:flex;gap:8px;align-items:center;">
-          <button class="btn btn-accent" onclick="saveGoals()">Save Goals</button>
-          <span id="goals-save-status" style="font-size:12px;"></span>
-        </div>
-      </div>
-      <div class="status-card">
-        <div class="status-card-title">Settings</div>
-        <div class="settings-grid" id="settings-grid">
-          <label>CEO Model
-            <select id="setting-ceo-model">
-              <option value="claude-sonnet-4-6">Sonnet</option>
-              <option value="claude-opus-4-6">Opus</option>
-              <option value="claude-haiku-4-5-20251001">Haiku</option>
+      <div class="tab-toolbar" id="tab-toolbar">
+        <div class="filters">
+          <label class="chip">
+            <span>Audience</span>
+            <select id="filter-audience">
+              <option value="">All</option>
+              <option value="app">App</option>
+              <option value="admin">Admin</option>
             </select>
           </label>
-          <label>Max Workers
-            <select id="setting-max-workers">
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="3" selected>3</option>
-              <option value="4">4</option>
-              <option value="5">5</option>
+          <label class="chip">
+            <span>Assignee</span>
+            <select id="filter-assignee">
+              <option value="">All</option>
+              <option>SA</option><option>AD</option><option>WA</option>
+              <option>DA</option><option>QA</option><option>WD</option>
+              <option>CEO</option><option>TA</option>
             </select>
           </label>
-          <label>Daily Budget ($)
-            <input type="number" id="setting-budget" min="1" max="500" value="50">
-          </label>
-          <label>Heartbeat (min)
-            <input type="number" id="setting-heartbeat" min="1" max="60" value="10">
-          </label>
-          <label>Stall Nudge (min)
-            <input type="number" id="setting-stall-nudge" min="1" max="10" value="2">
-          </label>
-          <label>Stall Kill (min)
-            <input type="number" id="setting-stall-kill" min="2" max="15" value="5">
-          </label>
-          <label>Hard Timeout (min)
-            <input type="number" id="setting-hard-timeout" min="5" max="120" value="15">
-          </label>
-          <label>Inactivity Pause (min)
-            <input type="number" id="setting-inactivity" min="5" max="480" value="60">
-          </label>
-          <label>Spawn Approval
-            <select id="setting-approval">
-              <option value="false" selected>Off</option>
-              <option value="true">On</option>
+          <input id="filter-q" class="search" placeholder="Search title/body…" />
+        </div>
+        <button id="refresh" class="btn-ghost">Refresh</button>
+      </div>
+
+      <div class="tab-panel" id="panel-board">
+        <div id="kanban" class="kanban"></div>
+      </div>
+      <div class="tab-panel hidden" id="panel-activity">
+        <ul id="activity-feed" class="activity"></ul>
+      </div>
+      <div class="tab-panel hidden" id="panel-inbox">
+        <ul id="my-inbox" class="ticket-list"></ul>
+      </div>
+      <div class="tab-panel hidden" id="panel-reports">
+        <div id="reports" class="reports">
+          <h3>Today</h3>
+          <ul id="report-summary"></ul>
+        </div>
+      </div>
+    </section>
+
+    <aside class="rail rail-right">
+      <section class="panel">
+        <h2 class="panel-title">Drop a Note</h2>
+        <form id="note-form" class="note-form">
+          <input id="note-title" type="text" placeholder="Title (optional — auto from first line)" maxlength="180" />
+          <textarea id="note-body" rows="6" maxlength="5000" placeholder="Idea, bug, ask, screenshot caption…"></textarea>
+          <div id="note-attachments" class="attachments"></div>
+          <div class="note-controls">
+            <select id="note-audience" title="Audience">
+              <option value="admin" selected>Admin</option>
+              <option value="app">App</option>
             </select>
-          </label>
-          <div class="settings-actions">
-            <button class="btn btn-accent" onclick="saveSettings()">Save</button>
-            <span id="settings-status" style="font-size: 12px; color: var(--green);"></span>
+            <select id="note-type" title="Type">
+              <option value="ops" selected>Ops</option>
+              <option value="bug">Bug</option>
+              <option value="feature">Feature</option>
+            </select>
+            <button type="button" id="btn-voice" class="btn-ghost" title="Voice (Web Speech API)">🎙</button>
+            <button type="button" id="btn-screenshot" class="btn-ghost" title="Attach image">📎</button>
+            <input id="file-input" type="file" accept="image/*" hidden />
+            <button type="submit" class="btn-primary">Send</button>
           </div>
-        </div>
-      </div>
-    </div>
-  </div>
+          <div id="note-status" class="note-status"></div>
+        </form>
+      </section>
 
-  <!-- Status Bar -->
-  <div class="status-bar" id="status-bar">
-    <span><span class="dot green" id="ceo-dot"></span> CEO <span id="ceo-state">Starting</span></span>
-    <span id="worker-count">0 workers</span>
-    <span id="status-cost">$0.00 today</span>
-    <span id="heartbeat-info"></span>
-  </div>
+      <section class="panel">
+        <h2 class="panel-title">CEO inbox <span id="inbox-count" class="pill"></span></h2>
+        <ul id="inbox-quick" class="ticket-list compact"></ul>
+      </section>
+    </aside>
+  </main>
 
-  <!-- Prompt Input -->
-  <div class="prompt-bar">
-    <div class="prompt-input-wrapper" id="prompt-wrapper">
-      <div id="image-previews" class="image-previews"></div>
-      <textarea id="prompt-input" placeholder="Prompt CEO... (Shift+Enter for new line, drop images here)" rows="1"></textarea>
-    </div>
-    <div class="prompt-buttons">
-      <button class="btn btn-mic" id="mic-btn" onclick="toggleVoice()" title="Voice input (V)">Mic</button>
-      <button class="btn btn-accent" onclick="sendPrompt()">Send</button>
-    </div>
-  </div>
+  <div id="toasts" class="toasts"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
-  <script src="dashboard.js"></script>
+  <!-- Side panel for ticket details -->
+  <aside id="side-panel" class="side-panel hidden" aria-hidden="true">
+    <header>
+      <button class="btn-ghost" id="side-close">✕</button>
+      <span id="side-id" class="side-id"></span>
+      <span id="side-status" class="status-pill"></span>
+    </header>
+    <div id="side-body" class="side-body"></div>
+    <footer class="side-actions">
+      <button id="side-copy" class="btn-secondary">Copy prompt</button>
+      <button id="side-start" class="btn-secondary">Start</button>
+      <button id="side-handoff" class="btn-secondary">Handoff</button>
+      <button id="side-done" class="btn-secondary">Done</button>
+    </footer>
+  </aside>
+
+  <script src="/dashboard.js" type="module"></script>
 </body>
 </html>

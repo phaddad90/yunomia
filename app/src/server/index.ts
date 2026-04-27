@@ -1,768 +1,225 @@
 import express from 'express';
-import rateLimit from 'express-rate-limit';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
-import { join, resolve, dirname } from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
-import { initLogger, rotateLogs } from './logger.js';
-import { SafetyModule } from './safety.js';
-import { TaskManager } from './tasks.js';
-import { AgentAdapter } from './agent-adapter.js';
-import { HeartbeatScheduler } from './heartbeat.js';
-import { McpServer } from './mcp-server.js';
-import { MetricsCollector } from './metrics.js';
-import { listPresets, applyPreset } from './presets.js';
-import { listSkills, runSkill } from './skills.js';
-import type { YunomiaConfig, WsMessage, HealthResponse } from './types.js';
-import { DEFAULT_CONFIG, DEFAULT_SAFETY_CONFIG } from './types.js';
-import type { Logger } from 'pino';
+import { initLogger } from './logger.js';
+import { PrintPepperBoardClient, BoardError } from './board-client.js';
+import { AuditPoller } from './audit-poller.js';
+import { deriveAgentStates } from './agent-state.js';
+import { AGENT_LIST } from './types.js';
+import type { AgentCode, MissionConfig, WsMessage } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // ─── Config ───
 
-function parseArgs(): YunomiaConfig {
+function parseConfig(): MissionConfig {
   const args = process.argv.slice(2);
-  const config = { ...DEFAULT_CONFIG };
-
+  let port = 4600;
+  let agentCode: AgentCode = 'TA';
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--project' && args[i + 1]) {
-      config.projectPath = resolve(args[++i]);
-    }
-    if (args[i] === '--port' && args[i + 1]) {
-      config.port = parseInt(args[++i]);
-    }
-    if (args[i] === '--model' && args[i + 1]) {
-      config.ceoModel = args[++i];
-    }
-    if (args[i] === '--preset' && args[i + 1]) {
-      (config as unknown as Record<string, unknown>).preset = args[++i];
-    }
+    if (args[i] === '--port' && args[i + 1]) port = parseInt(args[++i], 10);
+    if (args[i] === '--agent' && args[i + 1]) agentCode = args[++i] as AgentCode;
+  }
+  if (process.env.PP_AGENT_CODE) agentCode = process.env.PP_AGENT_CODE as AgentCode;
+
+  // Optional config file (next to the project root) for non-secret tweaks
+  const configPath = join(process.cwd(), 'mission-control.config.json');
+  let fileCfg: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try { fileCfg = JSON.parse(readFileSync(configPath, 'utf-8')); } catch { /* ignore */ }
   }
 
-  if (!config.projectPath) {
-    console.error('Usage: yunomia --project /path/to/your/code [--port 4600] [--model claude-sonnet-4-6]');
+  const apiBase = (process.env.PP_API_BASE as string) || (fileCfg.apiBase as string) || 'https://admin.printpepper.co.uk';
+  const agentToken = process.env.AGENT_API_TOKEN || (fileCfg.agentToken as string) || '';
+  const webhookSecret = process.env.PP_WEBHOOK_SECRET || (fileCfg.webhookSecret as string | undefined);
+  const auditPollMs = Number(process.env.PP_AUDIT_POLL_MS || fileCfg.auditPollMs || 8000);
+
+  if (!agentToken) {
+    console.error('Mission Control needs AGENT_API_TOKEN in env (or agentToken in mission-control.config.json).');
     process.exit(1);
   }
 
-  // Load config file if exists
-  const configPath = join(config.projectPath, 'yunomia.config.json');
-  if (existsSync(configPath)) {
-    try {
-      const fileConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
-      if (fileConfig.port) config.port = fileConfig.port;
-      if (fileConfig.ceoModel) config.ceoModel = fileConfig.ceoModel;
-      if (fileConfig.safety && typeof fileConfig.safety === 'object') {
-        // Validate each field against the same bounds used by the PATCH endpoint
-        const s = fileConfig.safety as Record<string, unknown>;
-        const valid = { ...DEFAULT_SAFETY_CONFIG };
-        if (typeof s.maxConcurrentWorkers === 'number' && s.maxConcurrentWorkers >= 1 && s.maxConcurrentWorkers <= 10) valid.maxConcurrentWorkers = s.maxConcurrentWorkers;
-        if (typeof s.maxDailyBudgetUsd === 'number' && s.maxDailyBudgetUsd >= 1 && s.maxDailyBudgetUsd <= 500) valid.maxDailyBudgetUsd = s.maxDailyBudgetUsd;
-        if (typeof s.maxWorkerRuntimeMinutes === 'number' && s.maxWorkerRuntimeMinutes >= 1 && s.maxWorkerRuntimeMinutes <= 120) valid.maxWorkerRuntimeMinutes = s.maxWorkerRuntimeMinutes;
-        if (typeof s.maxRetries === 'number' && s.maxRetries >= 0 && s.maxRetries <= 10) valid.maxRetries = s.maxRetries;
-        if (typeof s.inactivityPauseMinutes === 'number' && s.inactivityPauseMinutes >= 5 && s.inactivityPauseMinutes <= 480) valid.inactivityPauseMinutes = s.inactivityPauseMinutes;
-        if (typeof s.heartbeatIntervalMinutes === 'number' && s.heartbeatIntervalMinutes >= 1 && s.heartbeatIntervalMinutes <= 60) valid.heartbeatIntervalMinutes = s.heartbeatIntervalMinutes;
-        if (typeof s.maxCeoSessionHours === 'number' && s.maxCeoSessionHours >= 1 && s.maxCeoSessionHours <= 24) valid.maxCeoSessionHours = s.maxCeoSessionHours;
-        if (typeof s.maxPlannedTasks === 'number' && s.maxPlannedTasks >= 5 && s.maxPlannedTasks <= 100) valid.maxPlannedTasks = s.maxPlannedTasks;
-        if (typeof s.stallNudgeMinutes === 'number' && s.stallNudgeMinutes >= 1 && s.stallNudgeMinutes <= 10) valid.stallNudgeMinutes = s.stallNudgeMinutes;
-        if (typeof s.stallKillMinutes === 'number' && s.stallKillMinutes >= 2 && s.stallKillMinutes <= 15) valid.stallKillMinutes = s.stallKillMinutes;
-        if (typeof s.hardTimeoutMinutes === 'number' && s.hardTimeoutMinutes >= 5 && s.hardTimeoutMinutes <= 120) valid.hardTimeoutMinutes = s.hardTimeoutMinutes;
-        if (typeof s.requireApprovalForSpawn === 'boolean') valid.requireApprovalForSpawn = s.requireApprovalForSpawn;
-        config.safety = valid;
-      }
-    } catch (err) {
-      console.warn(`Warning: Failed to parse ${configPath}:`, err);
-    }
-  }
-
-  return config;
-}
-
-// ─── Project Init ───
-
-function initProject(projectPath: string, ceoModel: string): void {
-  mkdirSync(join(projectPath, 'ceo'), { recursive: true });
-  mkdirSync(join(projectPath, 'workers'), { recursive: true });
-
-  // PROJECT.md
-  if (!existsSync(join(projectPath, 'PROJECT.md'))) {
-    let projectName = projectPath.split('/').pop() || 'Project';
-
-    // Try to extract from package.json or README
-    let discoveredContext = '';
-    const pkgPath = join(projectPath, 'package.json');
-    if (existsSync(pkgPath)) {
-      try {
-        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-        if (pkg.name) projectName = pkg.name;
-        if (pkg.description) discoveredContext += `\n${pkg.description}\n`;
-      } catch { /* ignore */ }
-    }
-    const readmePath = join(projectPath, 'README.md');
-    if (existsSync(readmePath)) {
-      try {
-        const readme = readFileSync(readmePath, 'utf-8');
-        const firstParagraph = readme.split('\n\n').slice(0, 2).join('\n\n');
-        if (firstParagraph.length < 1000) {
-          discoveredContext += `\n${firstParagraph}\n`;
-        }
-      } catch { /* ignore */ }
-    }
-
-    writeFileSync(
-      join(projectPath, 'PROJECT.md'),
-      `# PROJECT - ${projectName}
-
-## Mission
-
-[Describe what you are building and why. Keep under 1,000 words.]
-${discoveredContext}
-
-## Goals
-
-- [ ] [Goal 1]
-- [ ] [Goal 2]
-- [ ] [Goal 3]
-
-## Constraints
-
-- **Budget:** Stay under $${DEFAULT_SAFETY_CONFIG.maxDailyBudgetUsd}/day
-- **Workers:** Max ${DEFAULT_SAFETY_CONFIG.maxConcurrentWorkers} concurrent
-
-## File Map
-
-| Path | What |
-|------|------|
-| \`${projectPath}\` | Project root |
-`,
-    );
-  }
-
-  // CEO SOUL.md
-  if (!existsSync(join(projectPath, 'ceo', 'SOUL.md'))) {
-    writeFileSync(
-      join(projectPath, 'ceo', 'SOUL.md'),
-      `# SOUL - CEO Agent
-
-## Identity
-- **Name:** CEO
-- **Role:** Strategic planning, task delegation, worker review
-- **Model:** ${ceoModel}
-
-## How You Work
-- You plan and delegate. You do not write code - workers do.
-- Read PROJECT.md for mission, GOALS.md for KPIs, TASKS.md for status.
-- Use MCP tools (tasks_create, tasks_update, spawn_worker) to manage work.
-- Review completed worker output in workers/{task-id}/output/ before marking done.
-- Before re-spawning a failed task, check if the worker left useful output.
-- Write specific decisions to MEMORY.md (not summaries). Be concise.
-- Don't re-read unchanged files. Respect token budgets. Max ${DEFAULT_SAFETY_CONFIG.maxConcurrentWorkers} workers.
-- You can read any file. You can write to ceo/ and manage tasks via MCP.
-- You cannot modify source code directly. When unsure, note it for the human.
-
-## Decision Making
-- NEVER present numbered options and ask the human to choose. You are the CEO - make the decision yourself.
-- If a task fails, decide the best recovery approach and execute it. Don't ask which approach to take.
-- Only ask the human when you genuinely lack information they haven't provided (e.g. credentials, preferences not in PROJECT.md).
-- "What do you want to do?" is not an acceptable response. Decide, act, report what you did.
-
-## Task Design
-- Break work into micro-tasks a single worker can complete in under 10 minutes.
-- Each task should produce 1-3 files maximum. If it needs more, split it.
-- Always include acceptance criteria in the task description: what files should exist when done.
-- Specify the output format: "Write Nav.tsx to output/Nav.tsx" not just "build the nav".
-- If a worker stalls or produces no output, try a simpler task scope before retrying the same one.
-- Use haiku for trivial edits, sonnet for new code, opus only for complex architecture.
-
-## Personality
-Direct, no fluff. Lead with the decision, then the reasoning.
-`,
-    );
-  }
-
-  // CEO GOALS.md
-  if (!existsSync(join(projectPath, 'ceo', 'GOALS.md'))) {
-    writeFileSync(
-      join(projectPath, 'ceo', 'GOALS.md'),
-      `# GOALS - CEO Agent
-
-## KPIs
-
-| KPI | Target | Measure |
-|-----|--------|---------|
-| Task throughput | 5 tasks delegated/day | Tasks moved to active |
-| Worker success rate | 80%+ first-attempt pass | Tasks not marked failed |
-| Token efficiency | < $${DEFAULT_SAFETY_CONFIG.maxDailyBudgetUsd}/day | Daily spend tracking |
-
-## Current Sprint Goals
-
-- [ ] Read PROJECT.md and understand the mission
-- [ ] Break the mission into initial tasks
-- [ ] Delegate first task to a worker
-
-## Standing Orders
-
-- Always check worker output before moving a task to Done
-- Flag any task that's been Active for more than 30 minutes
-- If a worker fails, note why before re-attempting
-`,
-    );
-  }
-
-  // CEO MEMORY.md
-  if (!existsSync(join(projectPath, 'ceo', 'MEMORY.md'))) {
-    writeFileSync(join(projectPath, 'ceo', 'MEMORY.md'), '# Memory\n\n_No entries yet._\n');
-  }
-
-  // TASKS.md
-  if (!existsSync(join(projectPath, 'TASKS.md'))) {
-    writeFileSync(
-      join(projectPath, 'TASKS.md'),
-      `# Tasks
-
-## Planned
-
-_No tasks_
-
-## Active
-
-_No tasks_
-
-## Done
-
-_No tasks_
-
-## Failed
-
-_No tasks_
-`,
-    );
-  }
+  return { port, apiBase, agentToken, agentCode, webhookSecret, auditPollMs };
 }
 
 // ─── Main ───
 
 async function main() {
-  const config = parseArgs();
-  const logger = initLogger(config.projectPath);
-  rotateLogs();
+  const config = parseConfig();
+  const logger = initLogger();
 
-  logger.info({ projectPath: config.projectPath, port: config.port, model: config.ceoModel }, 'Yunomia starting');
+  logger.info({ port: config.port, apiBase: config.apiBase, agent: config.agentCode }, 'Mission Control starting');
 
-  // Init project structure
-  initProject(config.projectPath, config.ceoModel);
+  const board = new PrintPepperBoardClient(config.apiBase, config.agentToken, config.agentCode);
 
-  // Apply preset if specified
-  const presetName = (config as unknown as Record<string, unknown>).preset as string | undefined;
-  if (presetName) {
-    const presetConfig = applyPreset(presetName, config.projectPath, logger);
-    if (presetConfig) {
-      config.ceoModel = presetConfig.recommendedModel;
-      config.safety.heartbeatIntervalMinutes = presetConfig.heartbeatIntervalMinutes;
-      config.safety.maxConcurrentWorkers = presetConfig.maxConcurrentWorkers;
-      logger.info({ preset: presetName, model: config.ceoModel }, 'Preset applied');
-    }
-  }
-
-  // Core modules
-  const safety = new SafetyModule(config.safety, logger);
-  safety.setProjectPath(config.projectPath);
-  const tasks = new TaskManager(config.projectPath, logger);
-  const adapter = new AgentAdapter(logger);
-  await adapter.init();
-
-  // Orphan cleanup
-  const orphaned = tasks.markOrphanedTasksFailed();
-  if (orphaned > 0) {
-    logger.warn({ count: orphaned }, 'Cleaned up orphaned tasks');
-  }
-
-  const metrics = new MetricsCollector(config.projectPath, logger);
-  safety.setOnDayReset(() => metrics.resetDailyMilestones());
-  const heartbeat = new HeartbeatScheduler(logger, safety, tasks, adapter, metrics);
-  const mcp = new McpServer(tasks, adapter, safety, heartbeat, logger, config.projectPath, metrics);
-
-  // ─── Express + HTTP ───
+  // ─── Express ───
 
   const app = express();
-  app.use(express.json({ limit: '10mb' })); // Large limit for image attachments
+  app.use(express.json({ limit: '10mb' }));
 
-  // Rate limiting
-  const promptLimiter = rateLimit({ windowMs: 5000, max: 1, message: { error: 'Rate limited - 1 prompt per 5 seconds' } });
-  const taskLimiter = rateLimit({ windowMs: 2000, max: 1, message: { error: 'Rate limited - 1 task per 2 seconds' } });
-  app.use('/api/prompt', promptLimiter);
-  app.use('/api/daily-review', promptLimiter);
-  app.post('/api/tasks', taskLimiter);
-
-  // Dashboard static files
+  // Static dashboard
   const dashboardDir = join(__dirname, '..', 'dashboard');
-  // Fallback to src directory during dev
   const staticDir = existsSync(dashboardDir) ? dashboardDir : join(__dirname, '..', '..', 'src', 'dashboard');
   app.use(express.static(staticDir));
 
-  // Health endpoint
-  // Onboarding check
-  app.get('/api/onboarding', (_req, res) => {
-    const projectMd = join(config.projectPath, 'PROJECT.md');
-    const needsOnboarding = !existsSync(projectMd) || readFileSync(projectMd, 'utf-8').includes('[Describe what you are building');
-    const presetsList = listPresets(logger);
-    res.json({
-      needsOnboarding,
-      projectPath: config.projectPath,
-      projectName: config.projectPath.split('/').pop(),
-      presets: presetsList.map(p => ({ name: p.name, ...p.config })),
-      currentModel: config.ceoModel,
-    });
+  // Identity (used by dashboard)
+  app.get('/api/me', (_req, res) => {
+    res.json({ agentCode: config.agentCode, apiBase: config.apiBase });
   });
 
-  app.post('/api/onboarding', async (req, res) => {
-    const { projectName, mission, goals, preset, model } = req.body;
+  // ─── Board read-through (browser hits local server, server hits PrintPepper) ───
 
-    // Validate input
-    if (projectName && (typeof projectName !== 'string' || projectName.length > 200)) {
-      return res.status(400).json({ error: 'Project name max 200 characters' });
+  app.get('/api/board/tickets', async (req, res) => {
+    try {
+      const tickets = await board.listTickets({
+        status: req.query.status as string | undefined,
+        assignee: req.query.assignee as string | undefined,
+        audience: req.query.audience as 'app' | 'admin' | undefined,
+        q: req.query.q as string | undefined,
+        limit: req.query.limit ? Number(req.query.limit) : 200,
+      });
+      const states = deriveAgentStates(tickets);
+      res.json({ tickets, agents: states });
+    } catch (err) {
+      handleErr(res, err);
     }
-    if (mission && (typeof mission !== 'string' || mission.length > 2000)) {
-      return res.status(400).json({ error: 'Mission max 2000 characters' });
-    }
-    if (goals && (typeof goals !== 'string' || goals.length > 2000)) {
-      return res.status(400).json({ error: 'Goals max 2000 characters' });
-    }
-    const validModels = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'];
-    if (model && !validModels.includes(model)) {
-      return res.status(400).json({ error: 'Invalid model' });
-    }
-
-    // Apply preset if selected
-    if (preset && preset !== 'default') {
-      applyPreset(preset, config.projectPath, logger);
-    }
-
-    // Write PROJECT.md
-    const projectMd = `# PROJECT - ${projectName || config.projectPath.split('/').pop()}
-
-## Mission
-
-${mission || '[Describe what you are building and why]'}
-
-## Goals
-
-${goals || '- [ ] [Goal 1]\n- [ ] [Goal 2]\n- [ ] [Goal 3]'}
-
-## Constraints
-
-- **Budget:** Stay under $${config.safety.maxDailyBudgetUsd}/day
-- **Workers:** Max ${config.safety.maxConcurrentWorkers} concurrent
-`;
-    writeFileSync(join(config.projectPath, 'PROJECT.md'), projectMd);
-
-    // Update model if changed
-    if (model) config.ceoModel = model;
-
-    res.json({ success: true });
   });
 
-  // CEO files (read/write SOUL.md, GOALS.md)
-  app.get('/api/ceo/soul', (_req, res) => {
-    const soulPath = join(config.projectPath, 'ceo', 'SOUL.md');
-    if (!existsSync(soulPath)) return res.status(404).json({ error: 'SOUL.md not found' });
-    res.type('text/markdown').send(readFileSync(soulPath, 'utf-8'));
+  app.get('/api/board/tickets/:id', async (req, res) => {
+    try { res.json(await board.getTicket(req.params.id)); } catch (err) { handleErr(res, err); }
   });
 
-  app.put('/api/ceo/soul', (req, res) => {
-    safety.recordHumanInteraction();
-    const { content } = req.body;
-    if (!content || typeof content !== 'string') return res.status(400).json({ error: 'Content required' });
-    if (content.length > 10000) return res.status(400).json({ error: 'Content max 10000 characters' });
-    writeFileSync(join(config.projectPath, 'ceo', 'SOUL.md'), content, 'utf-8');
-    res.json({ saved: true });
+  app.get('/api/board/queue/:agent', async (req, res) => {
+    try { res.json({ queue: await board.getQueue(req.params.agent.toUpperCase() as AgentCode) }); } catch (err) { handleErr(res, err); }
   });
 
-  app.get('/api/ceo/goals', (_req, res) => {
-    const goalsPath = join(config.projectPath, 'ceo', 'GOALS.md');
-    if (!existsSync(goalsPath)) return res.status(404).json({ error: 'GOALS.md not found' });
-    res.type('text/markdown').send(readFileSync(goalsPath, 'utf-8'));
-  });
+  // ─── CEO inbox (Drop a Note → ticket) ───
 
-  app.put('/api/ceo/goals', (req, res) => {
-    safety.recordHumanInteraction();
-    const { content } = req.body;
-    if (!content || typeof content !== 'string') return res.status(400).json({ error: 'Content required' });
-    if (content.length > 10000) return res.status(400).json({ error: 'Content max 10000 characters' });
-    writeFileSync(join(config.projectPath, 'ceo', 'GOALS.md'), content, 'utf-8');
-    res.json({ saved: true });
-  });
-
-  app.get('/api/project', (_req, res) => {
-    const projectPath = join(config.projectPath, 'PROJECT.md');
-    if (!existsSync(projectPath)) return res.status(404).json({ error: 'PROJECT.md not found' });
-    res.type('text/markdown').send(readFileSync(projectPath, 'utf-8'));
-  });
-
-  app.put('/api/project', (req, res) => {
-    safety.recordHumanInteraction();
-    const { content } = req.body;
-    if (!content || typeof content !== 'string') return res.status(400).json({ error: 'Content required' });
-    if (content.length > 5000) return res.status(400).json({ error: 'PROJECT.md max 5000 characters' });
-    writeFileSync(join(config.projectPath, 'PROJECT.md'), content, 'utf-8');
-    res.json({ saved: true });
-  });
-
-  // Running project total cost (sum all metrics files)
-  app.get('/api/metrics/total', (_req, res) => {
-    let totalCost = 0;
-    let totalTasks = 0;
-    let totalFailed = 0;
-    let totalWorkers = 0;
-    let totalSessions = 0;
-    const metricsDir = join(config.projectPath, 'metrics');
-    if (existsSync(metricsDir)) {
-      for (const file of readdirSync(metricsDir)) {
-        if (!file.endsWith('.jsonl')) continue;
-        totalSessions++;
-        try {
-          const lines = readFileSync(join(metricsDir, file), 'utf-8').trim().split('\n');
-          for (const line of lines) {
-            try {
-              const entry = JSON.parse(line);
-              if (entry.event === 'worker_completed') {
-                totalCost += entry.data?.costUsd || 0;
-                if (entry.data?.success) totalTasks++;
-                else totalFailed++;
-              }
-              if (entry.event === 'worker_spawned') totalWorkers++;
-            } catch { /* skip bad line */ }
-          }
-        } catch { /* skip bad file */ }
+  app.post('/api/notes', async (req, res) => {
+    try {
+      const { title, body, audience, type } = req.body || {};
+      if (!body || typeof body !== 'string' || body.length === 0) {
+        return res.status(400).json({ error: 'body required' });
       }
+      if (body.length > 5000) {
+        return res.status(400).json({ error: 'body max 5000 chars' });
+      }
+      const finalTitle = (typeof title === 'string' && title.trim())
+        ? title.trim().slice(0, 180)
+        : firstLine(body).slice(0, 180);
+      const ticket = await board.createTicket({
+        title: finalTitle,
+        body_md: body,
+        type: (type as 'ops' | 'bug' | 'feature') || 'ops',
+        audience: audience === 'app' ? 'app' : 'admin',
+        status: 'triage',
+        assignee_agent: 'CEO',
+      });
+      broadcast({ type: 'tickets_changed', data: { reason: 'note_created' } });
+      res.json({ ticket });
+    } catch (err) {
+      handleErr(res, err);
     }
-    // Also add current session spend
-    totalCost += safety.getDailySpend();
-    res.json({
-      totalCostUsd: Math.round(totalCost * 100) / 100,
-      tasksCompleted: totalTasks,
-      tasksFailed: totalFailed,
-      workersSpawned: totalWorkers,
-      sessions: totalSessions,
-    });
   });
 
-  app.get('/health', (_req, res) => {
-    const ceo = adapter.getCeoSession();
-    const mem = process.memoryUsage();
-    const counts = tasks.getStatusCounts();
+  // ─── Ticket transitions ───
 
-    const health: HealthResponse = {
-      version: process.env.npm_package_version || '1.0.0',
-      project: config.projectPath,
-      status: safety.isPaused() || !adapter.getCeoSession() || safety.isBudgetExhausted() ? 'degraded' : 'ok',
-      uptime: Math.floor(process.uptime()),
-      ceo: {
-        status: ceo?.status || 'not_started',
-        model: config.ceoModel,
-        sessionAge: ceo ? formatDuration(Date.now() - new Date(ceo.info.startedAt).getTime()) : '0s',
-        tokensToday: (ceo?.info.tokensInput ?? 0) + (ceo?.info.tokensOutput ?? 0),
-        costToday: safety.getDailySpend(),
-      },
-      workers: {
-        active: adapter.getActiveWorkerCount(),
-        max: config.safety.maxConcurrentWorkers,
-      },
-      budget: {
-        spent: safety.getDailySpend(),
-        limit: config.safety.maxDailyBudgetUsd,
-        percent: safety.getBudgetPercent(),
-      },
-      tasks: counts,
-      memory: {
-        rss: formatBytes(mem.rss),
-        heapUsed: formatBytes(mem.heapUsed),
-      },
+  app.post('/api/board/tickets/:id/start', async (req, res) => {
+    try { res.json({ ticket: await board.start(req.params.id) }); broadcast({ type: 'tickets_changed', data: { reason: 'start' } }); } catch (err) { handleErr(res, err); }
+  });
+  app.post('/api/board/tickets/:id/handoff', async (req, res) => {
+    try { res.json({ ticket: await board.handoff(req.params.id) }); broadcast({ type: 'tickets_changed', data: { reason: 'handoff' } }); } catch (err) { handleErr(res, err); }
+  });
+  app.post('/api/board/tickets/:id/done', async (req, res) => {
+    try { res.json({ ticket: await board.done(req.params.id) }); broadcast({ type: 'tickets_changed', data: { reason: 'done' } }); } catch (err) { handleErr(res, err); }
+  });
+  app.post('/api/board/tickets/:id/comments', async (req, res) => {
+    try {
+      const body_md = req.body?.body_md;
+      if (!body_md || typeof body_md !== 'string') return res.status(400).json({ error: 'body_md required' });
+      if (body_md.length > 10000) return res.status(400).json({ error: 'body_md max 10000 chars' });
+      const comment = await board.postComment(req.params.id, body_md);
+      broadcast({ type: 'tickets_changed', data: { reason: 'comment' } });
+      res.json({ comment });
+    } catch (err) { handleErr(res, err); }
+  });
+  app.patch('/api/board/tickets/:id', async (req, res) => {
+    try {
+      const allowed: Record<string, unknown> = {};
+      const fields = ['status', 'assignee_agent', 'audience', 'title', 'body_md', 'type'];
+      for (const f of fields) if (req.body?.[f] !== undefined) allowed[f] = req.body[f];
+      const ticket = await board.patch(req.params.id, allowed);
+      broadcast({ type: 'tickets_changed', data: { reason: 'patch' } });
+      res.json({ ticket });
+    } catch (err) { handleErr(res, err); }
+  });
+
+  // ─── Copy-prompt helper ───
+
+  app.get('/api/copy-prompt/:id', async (req, res) => {
+    try {
+      const { ticket } = await board.getTicket(req.params.id);
+      const prompt = renderRelayPrompt(ticket.ticket_human_id, ticket.assignee_agent, ticket.title);
+      res.json({ prompt });
+    } catch (err) { handleErr(res, err); }
+  });
+
+  // ─── Soul preview ───
+
+  app.get('/api/agents/:code/soul', (req, res) => {
+    const code = req.params.code.toUpperCase();
+    const folderMap: Record<string, string> = {
+      SA: 'SaaS Architect',
+      AD: 'App Developer',
+      WA: 'Workflow Architect',
+      DA: 'Docs Agent',
+      QA: 'QA Agent',
+      WD: 'Website Developer',
+      CEO: 'CEO',
+      TA: 'Tooling Agent',
     };
-    res.json(health);
-  });
-
-  // Tasks API
-  app.get('/api/tasks', (_req, res) => {
-    res.json(tasks.getState());
-  });
-
-  app.get('/api/tasks/content', (_req, res) => {
-    res.type('text/markdown').send(tasks.getTasksContent());
-  });
-
-  app.post('/api/tasks', async (req, res) => {
-    safety.recordHumanInteraction();
-    metrics.record('human_interaction', { action: 'create_task' });
-    if (tasks.getPlannedCount() >= safety.getConfig().maxPlannedTasks) {
-      return res.status(429).json({ error: `Planned task limit reached (${safety.getConfig().maxPlannedTasks})` });
-    }
-    const body = req.body;
-    if (!body.title || typeof body.title !== 'string' || body.title.length > 200) {
-      return res.status(400).json({ error: 'Title required, max 200 characters' });
-    }
-    if (body.description && (typeof body.description !== 'string' || body.description.length > 1000)) {
-      return res.status(400).json({ error: 'Description max 1000 characters' });
-    }
-    const task = await tasks.createTask(body);
-    heartbeat.notifyTaskChange();
-    broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
-    res.json(task);
-  });
-
-  app.patch('/api/tasks/:id', async (req, res) => {
-    safety.recordHumanInteraction();
-    metrics.record('human_interaction', { action: 'update_task' });
-    // Whitelist allowed fields
-    const allowed: Record<string, unknown> = {};
-    const validStatuses = ['planned', 'scheduled', 'active', 'done', 'failed', 'pulled'];
-    const validPriorities = ['low', 'medium', 'high', 'critical'];
-    const validModels = ['opus', 'sonnet', 'haiku'];
-    if (req.body.status && validStatuses.includes(req.body.status)) allowed.status = req.body.status;
-    if (req.body.priority && validPriorities.includes(req.body.priority)) allowed.priority = req.body.priority;
-    if (req.body.model && validModels.includes(req.body.model)) allowed.model = req.body.model;
-    if (typeof req.body.notes === 'string') allowed.notes = req.body.notes.slice(0, 1000);
-    if (typeof req.body.maxBudgetUsd === 'number' && req.body.maxBudgetUsd > 0 && req.body.maxBudgetUsd <= 50) allowed.maxBudgetUsd = req.body.maxBudgetUsd;
-    if (typeof req.body.retryCount === 'number' && req.body.retryCount >= 0) allowed.retryCount = req.body.retryCount;
-    const task = await tasks.updateTask(req.params.id, allowed);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-    heartbeat.notifyTaskChange();
-    broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
-    res.json(task);
-  });
-
-  // Agent status API
-  app.get('/api/agents', (_req, res) => {
-    const sessions = adapter.getAllSessions().map((s) => ({
-      id: s.id,
-      role: s.role,
-      taskId: s.taskId,
-      status: s.status,
-      info: adapter.getSessionInfo(s.id),
-    }));
-    res.json(sessions);
-  });
-
-  // Safety API
-  app.get('/api/safety', (_req, res) => {
-    res.json({
-      config: safety.getConfig(),
-      paused: safety.isPaused(),
-      budgetPercent: safety.getBudgetPercent(),
-      dailySpend: safety.getDailySpend(),
-      inactiveMinutes: safety.getInactivityMinutes(),
-      pendingApprovals: safety.getPendingApprovals(),
-    });
-  });
-
-  app.post('/api/safety/pause', (_req, res) => {
-    safety.recordHumanInteraction();
-    metrics.record('human_interaction', { action: 'pause' });
-    safety.pause('Human requested pause');
-    heartbeat.pause();
-    broadcast({ type: 'safety_alert', data: { action: 'paused' }, timestamp: new Date().toISOString() });
-    res.json({ paused: true });
-  });
-
-  app.post('/api/safety/resume', (_req, res) => {
-    safety.recordHumanInteraction();
-    metrics.record('human_interaction', { action: 'resume' });
-    safety.resume();
-    heartbeat.resume();
-    broadcast({ type: 'safety_alert', data: { action: 'resumed' }, timestamp: new Date().toISOString() });
-    res.json({ paused: false });
-  });
-
-  app.post('/api/safety/approve/:taskId', (req, res) => {
-    safety.recordHumanInteraction();
-    metrics.record('human_interaction', { action: 'approve_spawn' });
-    safety.resolveApproval(req.params.taskId, true);
-    res.json({ approved: true });
-  });
-
-  app.post('/api/safety/reject/:taskId', (req, res) => {
-    safety.recordHumanInteraction();
-    metrics.record('human_interaction', { action: 'reject_spawn' });
-    safety.resolveApproval(req.params.taskId, false);
-    res.json({ approved: false });
-  });
-
-  app.patch('/api/safety/config', (req, res) => {
-    safety.recordHumanInteraction();
-    safety.updateConfig(req.body);
-    res.json(safety.getConfig());
-  });
-
-  // Heartbeat API
-  app.get('/api/heartbeat', (_req, res) => {
-    res.json(heartbeat.getState());
-  });
-
-  // Metrics API
-  app.get('/api/metrics/summary', (_req, res) => {
-    res.json(metrics.getSummaryJson());
-  });
-
-  // Daily review (trigger without shutdown)
-  app.post('/api/daily-review', async (_req, res) => {
-    safety.recordHumanInteraction();
-    const ceo = adapter.getCeoSession();
-    if (!ceo) return res.status(503).json({ error: 'CEO not running' });
-
-    const summary = metrics.getSummaryJson();
-    const reviewPrompt = `Daily review time. Here are today's metrics:
-- Cost: $${summary.totalCostUsd.toFixed(2)} | Session: ${summary.sessionDurationMinutes}m
-- Tasks completed: ${summary.tasksCompleted} | Failed: ${summary.tasksFailed}
-- Workers spawned: ${summary.workersSpawned} | Success rate: ${summary.workerSuccessRate}%
-- Heartbeats: ${summary.heartbeatCount} | Skip rate: ${summary.heartbeatSkipRate}%
-- Human interactions: ${summary.humanInteractions}
-
-Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instructions.`;
-
-    try {
-      await adapter.sendMessage(ceo.id, reviewPrompt);
-      res.json({ sent: true, summary });
-    } catch (err) {
-      res.status(500).json({ error: `Failed: ${err}` });
-    }
-  });
-
-  app.get('/api/metrics/report', (_req, res) => {
-    res.type('text/markdown').send(metrics.getReportMarkdown(config.projectPath));
-  });
-
-  // Presets API
-  app.get('/api/presets', (_req, res) => {
-    const presets = listPresets(logger);
-    res.json(presets.map(p => ({ name: p.name, ...p.config })));
-  });
-
-  // Skills API
-  app.get('/api/skills', (_req, res) => {
-    const skills = listSkills(logger);
-    res.json(skills.map(s => ({
-      name: s.name,
-      description: s.description,
-      mode: s.mode,
-      workerModel: s.workerModel,
-      workers: s.workers,
-      configFields: s.configFields,
-    })));
-  });
-
-  app.post('/api/skills/run', async (req, res) => {
-    safety.recordHumanInteraction();
-    metrics.record('human_interaction', { action: 'prompt' });
-    const { skillName, config: skillConfig } = req.body;
-    if (!skillName) return res.status(400).json({ error: 'skillName required' });
-
-    const skills = listSkills(logger);
-    const skill = skills.find(s => s.name === skillName);
-    if (!skill) return res.status(404).json({ error: `Skill not found: ${skillName}` });
-
-    const result = await runSkill(
-      skill,
-      config.projectPath,
-      skillConfig || {},
-      adapter,
-      safety,
-      tasks,
-      logger,
-      (agentId: string) => onAgentOutput(agentId),
-      () => broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() }),
-    );
-
-    res.json(result);
-  });
-
-  // Prompt CEO
-  app.post('/api/prompt', async (req, res) => {
-    safety.recordHumanInteraction();
-    metrics.record('human_interaction', { action: 'prompt' });
-    const { message, images } = req.body;
-    if (!message || typeof message !== 'string') return res.status(400).json({ error: 'Message required' });
-    if (message.length > 8000) return res.status(400).json({ error: 'Prompt max 8000 characters' });
-    if (images && (!Array.isArray(images) || images.length > 5)) {
-      return res.status(400).json({ error: 'Max 5 images per message' });
-    }
-
-    const ceo = adapter.getCeoSession();
-    if (!ceo) return res.status(503).json({ error: 'CEO not running' });
-
-    // Build content: text + optional images
-    let content: string | Array<{ type: string; [key: string]: unknown }> = message;
-    if (images && images.length > 0) {
-      const blocks: Array<{ type: string; [key: string]: unknown }> = [];
-      for (const img of images) {
-        if (img.data && img.mediaType) {
-          blocks.push({
-            type: 'image',
-            source: { type: 'base64', media_type: img.mediaType, data: img.data },
-          });
-        }
+    const candidates = [
+      `/Users/peter/Desktop/Websites/prooflab/SaaS Architect/${folderMap[code] || code}/soul.md`,
+      `/Users/peter/Desktop/Websites/prooflab/SaaS Architect/${code}-soul.md`,
+      `/Users/peter/Desktop/Websites/prooflab/SaaS Architect/${code}-resume.md`,
+    ];
+    for (const p of candidates) {
+      if (existsSync(p)) {
+        return res.type('text/markdown').send(readFileSync(p, 'utf-8'));
       }
-      blocks.push({ type: 'text', text: message });
-      content = blocks;
     }
+    res.status(404).json({ error: 'soul file not found yet (PH-036 will publish via API)' });
+  });
 
+  // ─── Webhook receiver (HMAC-validated) ───
+
+  app.post('/webhook/board-event', express.raw({ type: '*/*', limit: '256kb' }), (req, res) => {
+    if (!config.webhookSecret) return res.status(503).json({ error: 'webhook secret not configured' });
+    const sig = String(req.header('x-pp-signature') || '');
+    const raw = req.body as Buffer;
+    const expected = crypto.createHmac('sha256', config.webhookSecret).update(raw).digest('hex');
+    const provided = sig.startsWith('sha256=') ? sig.slice('sha256='.length) : sig;
+    if (provided.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) {
+      return res.status(401).json({ error: 'invalid signature' });
+    }
     try {
-      await adapter.sendMessage(ceo.id, content);
-      res.json({ sent: true });
-    } catch (err) {
-      res.status(500).json({ error: `Failed to send: ${err}` });
-    }
+      const evt = JSON.parse(raw.toString('utf-8'));
+      logger.info({ action: evt?.action }, 'webhook event');
+      broadcast({ type: 'tickets_changed', data: { reason: 'webhook' } });
+    } catch { /* ignore bad payloads */ }
+    res.json({ ok: true });
   });
 
-  // Kill worker
-  app.post('/api/agents/:id/kill', async (req, res) => {
-    safety.recordHumanInteraction();
-    metrics.record('human_interaction', { action: 'kill_worker' });
-    const session = adapter.getSession(req.params.id);
-    if (!session) return res.status(404).json({ error: 'Agent not found' });
+  // Health
+  app.get('/health', (_req, res) => res.json({ status: 'ok', agent: config.agentCode, apiBase: config.apiBase }));
 
-    // Capture info before kill destroys it
-    const info = adapter.getSessionInfo(req.params.id);
-
-    await adapter.killSession(req.params.id);
-
-    // Record worker_killed metric
-    metrics.record('worker_killed', {
-      taskId: session.taskId || 'unknown',
-      agentId: req.params.id,
-      reason: 'human',
-    });
-
-    // Record worker_completed metric
-    if (info) {
-      metrics.record('worker_completed', {
-        taskId: session.taskId || 'unknown',
-        agentId: req.params.id,
-        model: session.config.model,
-        durationMinutes: Math.round(info.runtime / 60000),
-        tokensInput: info.tokensInput,
-        tokensOutput: info.tokensOutput,
-        costUsd: info.costUsd,
-        success: false,
-      });
-    }
-
-    // Mark task as failed
-    if (session.taskId) {
-      await tasks.updateTask(session.taskId, {
-        status: 'failed',
-        notes: 'Killed by human',
-      });
-      heartbeat.notifyTaskChange();
-    }
-
-    broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
-    res.json({ killed: true });
-  });
-
-  // ─── WebSocket ───
+  // ─── HTTP + WS ───
 
   const server = createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -770,703 +227,73 @@ Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instr
 
   wss.on('connection', (ws) => {
     clients.add(ws);
-    logger.info({ clients: clients.size }, 'WebSocket client connected');
-
-    // Send initial state
-    ws.send(JSON.stringify({
-      type: 'tasks_updated',
-      data: tasks.getState(),
-      timestamp: new Date().toISOString(),
-    }));
-
-    ws.on('close', () => {
-      clients.delete(ws);
-    });
-
-    ws.on('message', (raw) => {
-      try {
-        const msg = JSON.parse(raw.toString());
-        if (msg.type === 'prompt' && typeof msg.message === 'string' && msg.message.length <= 8000) {
-          // Server-side rate limit on WS prompts (matches HTTP limiter)
-          const now = Date.now();
-          const wsAny = ws as unknown as Record<string, number>;
-          if (wsAny._lastPrompt && now - wsAny._lastPrompt < 5000) return;
-          wsAny._lastPrompt = now;
-          safety.recordHumanInteraction();
-          const ceo = adapter.getCeoSession();
-          if (ceo) {
-            adapter.sendMessage(ceo.id, msg.message).catch((err) => {
-              logger.error({ err }, 'Failed to send prompt via WebSocket');
-            });
-          }
-        }
-      } catch { /* ignore bad messages */ }
-    });
+    send(ws, { type: 'hello', data: { agentCode: config.agentCode, serverTime: new Date().toISOString() } });
+    ws.on('close', () => clients.delete(ws));
   });
 
+  function send(ws: WebSocket, msg: WsMessage): void {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  }
   function broadcast(msg: WsMessage): void {
     const data = JSON.stringify(msg);
-    for (const client of clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(data);
-      }
-    }
+    for (const c of clients) if (c.readyState === WebSocket.OPEN) c.send(data);
   }
 
-  // ─── Agent Output → WebSocket ───
+  // ─── Audit polling ───
 
-  function onAgentOutput(agentId: string) {
-    return (data: string) => {
-      broadcast({
-        type: 'terminal_output',
-        agentId,
-        data,
-        timestamp: new Date().toISOString(),
-      });
-    };
-  }
+  const poller = new AuditPoller(
+    board,
+    config.auditPollMs,
+    logger,
+    (row) => broadcast({ type: 'audit_event', data: row }),
+    () => broadcast({ type: 'tickets_changed', data: { reason: 'audit' } }),
+  );
+  poller.start();
 
-  // ─── Cost Tracking (delta-based to avoid double-counting cumulative totals) ───
+  // ─── Start ───
 
-  const lastKnownCost = new Map<string, number>();
-  const lastKnownTokens = new Map<string, { tokens: number; time: number }>();
-  const nudgedWorkers = new Set<string>();
-
-  function getStallThresholds() {
-    const c = safety.getConfig();
-    return {
-      nudgeMs: c.stallNudgeMinutes * 60 * 1000,
-      killMs: c.stallKillMinutes * 60 * 1000,
-      hardMs: c.hardTimeoutMinutes * 60 * 1000,
-    };
-  }
-
-  adapter.setOnCostUpdate((agentId, costUsd, tokensInput, tokensOutput) => {
-    const previous = lastKnownCost.get(agentId) || 0;
-    const delta = Math.max(0, costUsd - previous);
-    lastKnownCost.set(agentId, costUsd);
-
-    // Track token activity for stall detection
-    const totalTokens = tokensInput + tokensOutput;
-    const prev = lastKnownTokens.get(agentId);
-    if (!prev || totalTokens > prev.tokens) {
-      lastKnownTokens.set(agentId, { tokens: totalTokens, time: Date.now() });
-      // Reset nudge flag - worker is active again, gets a fresh nudge if it stalls later
-      nudgedWorkers.delete(agentId);
-    }
-
-    if (delta > 0) {
-      safety.recordSpend(delta);
-      metrics.checkCostMilestone(safety.getDailySpend(), config.safety.maxDailyBudgetUsd);
-    }
-    logger.info({ agentId, costUsd: costUsd.toFixed(4), delta: delta.toFixed(4), tokensInput, tokensOutput }, 'Cost update');
-  });
-
-  // Worker spawn stall detection - kill and retry if no tokens in 60s
-  adapter.setOnWorkerStalled(async (agentId, taskId, reason) => {
-    logger.warn({ agentId, taskId, reason }, 'Worker stalled on spawn - killing');
-    await adapter.killSession(agentId);
-
-    if (taskId) {
-      const task = tasks.getTask(taskId);
-      const retryCount = (task?.retryCount ?? 0) + 1;
-
-      if (retryCount <= (task?.maxRetries ?? 2)) {
-        // Retry: put back to planned
-        await tasks.updateTask(taskId, {
-          status: 'planned',
-          assignee: null,
-          notes: `Spawn stall #${retryCount} - auto-retrying`,
-          retryCount,
-        });
-        logger.info({ taskId, retryCount }, 'Task re-queued after spawn stall');
-      } else {
-        await tasks.updateTask(taskId, {
-          status: 'failed',
-          notes: `Failed after ${retryCount} spawn stalls - needs human review`,
-          retryCount,
-        });
-      }
-      heartbeat.notifyTaskChange();
-      broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
-    }
-  });
-
-  // Worker natural completion - verify output, then update task
-  adapter.setOnWorkerCompleted(async (agentId, taskId, info) => {
-    if (taskId) {
-      // Verify output directory has files
-      const outputDir = join(config.projectPath, 'workers', taskId, 'output');
-      let hasOutput = false;
-      let outputFiles: string[] = [];
-      try {
-        if (existsSync(outputDir)) {
-          outputFiles = readdirSync(outputDir).filter(f => {
-            // Check file is non-empty (Fix #20: empty files don't count)
-            try { return require('fs').statSync(join(outputDir, f)).size > 0; } catch { return false; }
-          });
-          hasOutput = outputFiles.length > 0;
-        }
-      } catch { /* ignore */ }
-
-      const status = hasOutput ? 'done' : 'failed';
-      const notes = hasOutput
-        ? `Completed in ${Math.round(info.runtime / 60000)}m, $${info.costUsd.toFixed(2)}, ${outputFiles.length} files`
-        : `Worker finished but produced no output files ($${info.costUsd.toFixed(2)})`;
-
-      await tasks.updateTask(taskId, {
-        status,
-        tokenCost: { input: info.tokensInput, output: info.tokensOutput, totalUsd: info.costUsd },
-        notes,
-      });
-      metrics.record('worker_completed', {
-        taskId,
-        agentId,
-        model: info.model,
-        durationMinutes: Math.round(info.runtime / 60000),
-        tokensInput: info.tokensInput,
-        tokensOutput: info.tokensOutput,
-        costUsd: info.costUsd,
-        success: hasOutput,
-      });
-      heartbeat.notifyTaskChange();
-      broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
-      // Clean up tracking for this worker
-      nudgedWorkers.delete(agentId);
-      lastKnownTokens.delete(agentId);
-      lastKnownCost.delete(agentId);
-      logger.info({ taskId, agentId, cost: info.costUsd.toFixed(2), hasOutput }, `Worker completed - ${status}`);
-
-      // Git auto-commit on successful completion (scoped to worker output only)
-      if (hasOutput) {
-        try {
-          const { execFileSync } = await import('child_process');
-          const opts = { cwd: config.projectPath, stdio: 'ignore' as const };
-          // Check if project is a git repo
-          execFileSync('git', ['rev-parse', '--git-dir'], opts);
-          // Stage ONLY the worker's output directory (not the entire project)
-          execFileSync('git', ['add', `workers/${taskId}/output/`], opts);
-          // Commit with safe argument passing (no shell interpolation)
-          const taskObj = tasks.getTask(taskId);
-          const msg = `[Yunomia] ${taskObj?.title || taskId} - completed by ${agentId}`;
-          execFileSync('git', ['commit', '-m', msg, '--allow-empty'], opts);
-          logger.info({ taskId }, 'Git auto-commit after worker completion');
-        } catch {
-          // Not a git repo or commit failed - non-fatal
-        }
-      }
-    }
-  });
-
-  // ─── Worker lifecycle ───
-
-  // Wire task change broadcasts from MCP (CEO-initiated task mutations)
-  mcp.setOnTasksChanged(() => {
-    broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
-  });
-
-  // Wire worker output streaming to dashboard
-  mcp.setOnWorkerOutput((agentId: string) => onAgentOutput(agentId));
-
-  mcp.setOnWorkerSpawned((agentId, taskId) => {
-    // Start tracking token activity from spawn time
-    lastKnownTokens.set(agentId, { tokens: 0, time: Date.now() });
-    broadcast({
-      type: 'agent_status',
-      agentId,
-      data: { status: 'running', taskId },
-      timestamp: new Date().toISOString(),
-    });
-  });
-
-  // Wire spawn approval notifications to dashboard
-  mcp.setOnSpawnApprovalNeeded((taskId, task) => {
-    broadcast({
-      type: 'spawn_approval_request',
-      data: { taskId, title: task.title, model: task.model },
-      timestamp: new Date().toISOString(),
-    });
-  });
-
-  // Shutdown endpoint
-  app.post('/api/shutdown', async (_req, res) => {
-    res.json({ shutting_down: true });
-    shutdown('API');
-  });
-
-  // Worker timeout checker + system health loop
-  let ceoRestartPending = false;
-  let ceoCrashCount = 0;
-  let lastCeoCrashTime = 0;
-  const MAX_CEO_CRASHES = 3;
-  const CEO_CRASH_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-
-  setInterval(async () => {
-   try {
-    // Worker health check: 3-stage (nudge 2min, kill 5min, hard timeout 15min)
-    for (const session of adapter.getActiveSessions('worker')) {
-      const startTime = new Date(session.info.startedAt).getTime();
-      const elapsed = Date.now() - startTime;
-      const activity = lastKnownTokens.get(session.id);
-      const silentMs = activity ? (Date.now() - activity.time) : elapsed;
-
-      const thresholds = getStallThresholds();
-
-      // Stage 1: Nudge at configured silence threshold
-      if (silentMs > thresholds.nudgeMs && !nudgedWorkers.has(session.id)) {
-        nudgedWorkers.add(session.id);
-        logger.info({ agentId: session.id, silentSec: Math.round(silentMs / 1000) }, 'Nudging stalled worker');
-        adapter.sendMessage(session.id, 'You appear to be stalled. If you are working, continue. If you are stuck, write what you have to the output directory and stop.').catch(() => {});
-        continue; // give it a chance to respond before killing
-      }
-
-      // Stage 2: Kill at configured silence threshold
-      const isStalled = silentMs > thresholds.killMs;
-
-      // Stage 3: Hard timeout (configurable, per-task override available)
-      const task = session.taskId ? tasks.getTask(session.taskId) : undefined;
-      const hardTimeoutMs = task?.maxRuntimeMinutes ? task.maxRuntimeMinutes * 60 * 1000 : thresholds.hardMs;
-      const hardTimeout = elapsed > hardTimeoutMs;
-
-      const reason = isStalled ? `stalled (no tokens for ${Math.round(silentMs / 60000)}min)` : hardTimeout ? `hard timeout (${Math.round(elapsed / 60000)}min)` : null;
-
-      if (reason) {
-        logger.warn({ agentId: session.id, taskId: session.taskId, reason }, `Worker killed: ${reason}`);
-        try {
-          // Capture info before kill
-          const info = adapter.getSessionInfo(session.id);
-
-          await adapter.killSession(session.id);
-
-          // Record metrics
-          metrics.record('worker_killed', {
-            taskId: session.taskId || 'unknown',
-            agentId: session.id,
-            reason: 'timeout',
-          });
-          if (info) {
-            metrics.record('worker_completed', {
-              taskId: session.taskId || 'unknown',
-              agentId: session.id,
-              model: session.config.model,
-              durationMinutes: Math.round(info.runtime / 60000),
-              tokensInput: info.tokensInput,
-              tokensOutput: info.tokensOutput,
-              costUsd: info.costUsd,
-              success: false,
-            });
-          }
-
-          // Clean up tracking
-          lastKnownTokens.delete(session.id);
-          lastKnownCost.delete(session.id);
-          nudgedWorkers.delete(session.id);
-
-          if (session.taskId) {
-            const current = tasks.getTask(session.taskId);
-            await tasks.updateTask(session.taskId, {
-              status: 'failed',
-              notes: reason,
-              retryCount: (current?.retryCount ?? 0) + 1,
-            });
-            heartbeat.notifyTaskChange();
-            broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
-          }
-        } catch (err) {
-          logger.error({ err, agentId: session.id }, 'Failed to kill timed-out worker');
-        }
-      }
-    }
-
-    // Activate due scheduled tasks
-    const activated = await tasks.activateDueTasks();
-    if (activated > 0) {
-      heartbeat.notifyTaskChange();
-      broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
-    }
-
-    // Fast-path: detect active tasks with no running worker session and mark failed
-    for (const task of tasks.listTasks({ status: 'active' })) {
-      if (task.assignee) {
-        const workerSession = adapter.getSession(task.assignee);
-        if (!workerSession) {
-          logger.warn({ taskId: task.id, assignee: task.assignee }, 'Active task has no running worker - marking failed');
-          await tasks.updateTask(task.id, {
-            status: 'failed',
-            notes: (task.notes ? task.notes + ' | ' : '') + 'Worker crashed or completed without updating task',
-            retryCount: (task.retryCount ?? 0) + 1,
-          });
-          heartbeat.notifyTaskChange();
-          broadcast({ type: 'tasks_updated', data: tasks.getState(), timestamp: new Date().toISOString() });
-        }
-      }
-    }
-
-    // CEO crash recovery with backoff - if no CEO session exists, restart it
-    if (!ceoRestartPending && !adapter.getCeoSession()) {
-      // Check crash frequency - stop retrying after MAX_CEO_CRASHES within the window
-      const now = Date.now();
-      if (now - lastCeoCrashTime > CEO_CRASH_WINDOW_MS) {
-        ceoCrashCount = 0; // reset counter if outside window
-      }
-      ceoCrashCount++;
-      lastCeoCrashTime = now;
-
-      if (ceoCrashCount > MAX_CEO_CRASHES) {
-        logger.error({ crashes: ceoCrashCount }, 'CEO crash limit reached - pausing system');
-        safety.pause('CEO crash loop detected');
-        heartbeat.pause();
-        broadcast({
-          type: 'safety_alert',
-          data: { action: 'paused', reason: `CEO crashed ${ceoCrashCount} times in ${CEO_CRASH_WINDOW_MS / 60000}m - manual restart needed` },
-          timestamp: new Date().toISOString(),
-        });
-      } else {
-        ceoRestartPending = true;
-        logger.warn({ crashCount: ceoCrashCount }, 'CEO session not found - auto-restarting');
-        metrics.record('ceo_restart', {
-          reason: 'crash',
-          sessionDurationMinutes: 0,
-          totalTokens: 0,
-          totalCostUsd: 0,
-        });
-        broadcast({
-          type: 'safety_alert',
-          data: { action: 'ceo_restarted', reason: 'crash' },
-          timestamp: new Date().toISOString(),
-        });
-        await startCeo();
-        ceoRestartPending = false;
-      }
-    }
-
-    // CEO session age check (guarded against double restart)
-    const ceo = adapter.getCeoSession();
-    if (!ceoRestartPending && ceo && safety.shouldRestartCeo(new Date(ceo.info.startedAt).getTime())) {
-      ceoRestartPending = true;
-      logger.info('CEO session age limit reached - restarting');
-
-      const ceoInfo = adapter.getSessionInfo(ceo.id);
-      const sessionDurationMinutes = ceoInfo ? Math.round(ceoInfo.runtime / 60000) : 0;
-      metrics.record('ceo_restart', {
-        reason: 'session_age',
-        sessionDurationMinutes,
-        totalTokens: ceoInfo ? ceoInfo.tokensInput + ceoInfo.tokensOutput : 0,
-        totalCostUsd: ceoInfo?.costUsd ?? 0,
-      });
-
-      try {
-        await adapter.sendMessage(ceo.id, 'Session age limit reached. Write critical context to MEMORY.md now.');
-        await new Promise((r) => setTimeout(r, 15000));
-      } catch { /* ignore */ }
-      await adapter.killSession(ceo.id);
-      await startCeo();
-      ceoRestartPending = false;
-    }
-
-    // Inactivity check
-    if (safety.isInactive() && !safety.isPaused()) {
-      logger.info({ inactiveMinutes: safety.getInactivityMinutes() }, 'Auto-pausing due to inactivity');
-      safety.pause('Human inactive');
-      heartbeat.pause();
-      broadcast({
-        type: 'safety_alert',
-        data: { action: 'paused', reason: 'Human inactive' },
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    // MEMORY.md rotation check
-    rotateMemory(join(config.projectPath, 'ceo'), logger);
-
-    // Cost update broadcast
-    broadcast({
-      type: 'cost_update',
-      data: {
-        dailySpend: safety.getDailySpend(),
-        budgetPercent: safety.getBudgetPercent(),
-        warning: safety.isBudgetWarning(),
-        exhausted: safety.isBudgetExhausted(),
-      },
-      timestamp: new Date().toISOString(),
-    });
-   } catch (err) {
-    logger.error({ err }, 'Health loop error');
-   }
-  }, 30000);
-
-  // ─── Start CEO ───
-
-  async function startCeo() {
-    // Build MCP server config for the CEO using the SDK's createSdkMcpServer
-    let mcpServers: Record<string, unknown> | undefined;
-    const { getCreateSdkMcpServerFn, getToolFn } = await import('./agent-adapter.js');
-    const createMcp = getCreateSdkMcpServerFn();
-    const toolBuilder = getToolFn();
-
-    if (createMcp && toolBuilder) {
-      // Build SDK MCP tools using the tool() helper
-      const z = await import('zod/v4').then(m => m.z).catch(() =>
-        import('zod').then(m => m.z).catch(() => null)
-      );
-      if (z) {
-        const sdkTools = buildSdkMcpTools(mcp, z, toolBuilder);
-        const mcpConfig = createMcp({ name: 'yunomia', tools: sdkTools });
-        mcpServers = { yunomia: mcpConfig };
-        logger.info({ toolCount: sdkTools.length }, 'MCP server created for CEO');
-      }
-    }
-
-    if (!mcpServers) {
-      logger.warn('Could not create SDK MCP server - CEO will run without MCP tools');
-      broadcast({
-        type: 'safety_alert',
-        data: { action: 'warning', reason: 'CEO started without MCP tools - task management unavailable' },
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    const ceoSession = await adapter.spawnSession(
-      'ceo',
-      {
-        model: config.ceoModel,
-        cwd: join(config.projectPath, 'ceo'),
-        additionalDirectories: [config.projectPath],
-        persistSession: true,
-        permissionMode: 'bypassPermissions',
-        mcpServers,
-        canUseTool: safety.createCeoToolGuard(join(config.projectPath, 'ceo')),
-      },
-      onAgentOutput('ceo'),
-    );
-
-    heartbeat.setCeoAgentId(ceoSession.id);
-    heartbeat.start();
-
-    logger.info({ agentId: ceoSession.id, model: config.ceoModel }, 'CEO started');
-    broadcast({
-      type: 'agent_status',
-      agentId: ceoSession.id,
-      data: { status: 'running', role: 'ceo' },
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  // ─── Graceful Shutdown ───
-
-  async function shutdown(signal: string) {
-    logger.info({ signal }, 'Shutdown initiated');
-
-    // Hard ceiling: force exit after 30 seconds
-    const hardExit = setTimeout(() => {
-      logger.error('Shutdown timeout - forcing exit');
-      process.exit(1);
-    }, 30000);
-
-    // 1. Stop heartbeat
-    heartbeat.stop();
-
-    // 2. Send CEO daily review + shutdown message
-    const ceo = adapter.getCeoSession();
-    if (ceo) {
-      try {
-        const summary = metrics.getSummaryJson();
-        const reviewPrompt = `Daily review time. Here are today's metrics:
-- Cost: $${summary.totalCostUsd.toFixed(2)} | Session: ${summary.sessionDurationMinutes}m
-- Tasks completed: ${summary.tasksCompleted} | Failed: ${summary.tasksFailed}
-- Workers spawned: ${summary.workersSpawned} | Success rate: ${summary.workerSuccessRate}%
-- Heartbeats: ${summary.heartbeatCount} | Skip rate: ${summary.heartbeatSkipRate}%
-- Human interactions: ${summary.humanInteractions}
-
-Write a "Lessons Learned" entry to MEMORY.md per your SOUL.md daily review instructions. Then the server is shutting down - save any other critical context.`;
-        await adapter.sendMessage(ceo.id, reviewPrompt);
-        await new Promise((r) => setTimeout(r, 15000)); // Give CEO 15s to write lessons
-      } catch { /* ignore */ }
-    }
-
-    // 3. Kill all workers
-    const workers = adapter.getActiveSessions('worker');
-    for (const w of workers) {
-      const wInfo = adapter.getSessionInfo(w.id);
-      metrics.record('worker_killed', {
-        taskId: w.taskId || 'unknown',
-        agentId: w.id,
-        reason: 'shutdown',
-      });
-      if (wInfo) {
-        metrics.record('worker_completed', {
-          taskId: w.taskId || 'unknown',
-          agentId: w.id,
-          model: w.config.model,
-          durationMinutes: Math.round(wInfo.runtime / 60000),
-          tokensInput: wInfo.tokensInput,
-          tokensOutput: wInfo.tokensOutput,
-          costUsd: wInfo.costUsd,
-          success: false,
-        });
-      }
-      if (w.taskId) {
-        await tasks.updateTask(w.taskId, { status: 'failed', notes: 'Server shutdown' });
-      }
-      await adapter.killSession(w.id);
-    }
-
-    // 4. Kill CEO
-    if (ceo) await adapter.killSession(ceo.id);
-
-    // 5. Generate daily metrics summary and report
-    try {
-      metrics.generateDailySummary();
-      metrics.generateDailyReport(config.projectPath);
-      logger.info('Daily metrics summary and report generated');
-    } catch (err) {
-      logger.error({ err }, 'Failed to generate daily metrics on shutdown');
-    }
-
-    // 6. Cleanup
-    tasks.destroy();
-
-    // 7. Close WebSockets
-    for (const client of clients) {
-      client.close(1001, 'Server shutting down');
-    }
-
-    const totalSpend = safety.getDailySpend();
-    logger.info({ totalSpend: totalSpend.toFixed(2) }, 'Yunomia stopped');
-    server.close();
-    process.exit(0);
-  }
-
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('uncaughtException', (err) => {
-    logger.error({ err }, 'Uncaught exception');
-    shutdown('uncaughtException');
-  });
-  process.on('unhandledRejection', (err) => {
-    logger.error({ err }, 'Unhandled rejection');
-  });
-
-  // ─── Start Server ───
+  process.on('SIGINT', () => { poller.stop(); server.close(); process.exit(0); });
+  process.on('SIGTERM', () => { poller.stop(); server.close(); process.exit(0); });
 
   server.listen(config.port, '127.0.0.1', () => {
-    logger.info({ port: config.port, project: config.projectPath }, `Yunomia running at http://localhost:${config.port}`);
-    console.log(`\n  Yunomia running at http://localhost:${config.port}`);
-    console.log(`  Project: ${config.projectPath}`);
-    console.log(`  CEO Model: ${config.ceoModel}\n`);
-    startCeo();
+    logger.info({ port: config.port }, `Mission Control running at http://localhost:${config.port}`);
+    console.log(`\n  PrintPepper Mission Control v0.1`);
+    console.log(`  http://localhost:${config.port}  (agent: ${config.agentCode})\n`);
   });
 }
 
 // ─── Helpers ───
 
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return `${hours}h${mins}m`;
+function firstLine(s: string): string {
+  return (s.split('\n')[0] || s).trim();
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(0)}MB`;
-}
-
-// ─── MEMORY.md Rotation ───
-
-function rotateMemory(ceoDir: string, logger: Logger): void {
-  const memPath = join(ceoDir, 'MEMORY.md');
-  const archivePath = join(ceoDir, 'MEMORY-archive.md');
-
-  if (!existsSync(memPath)) return;
-
-  try {
-    const content = readFileSync(memPath, 'utf-8');
-    const lines = content.split('\n');
-
-    if (lines.length <= 50) return;
-
-    // Move all content to archive (append)
-    const archiveContent = existsSync(archivePath) ? readFileSync(archivePath, 'utf-8') : '';
-    const newArchive = archiveContent + '\n---\n' + content;
-
-    // Cap archive at 200 lines (keep newest)
-    const archiveLines = newArchive.split('\n');
-    const cappedArchive = archiveLines.length > 200
-      ? archiveLines.slice(archiveLines.length - 200).join('\n')
-      : newArchive;
-
-    writeFileSync(archivePath, cappedArchive, 'utf-8');
-    writeFileSync(memPath, '# Memory\n\n_Rotated to MEMORY-archive.md. Write new entries below._\n', 'utf-8');
-
-    logger.info({ lines: lines.length }, 'MEMORY.md rotated');
-  } catch (err) {
-    logger.error({ err }, 'Failed to rotate MEMORY.md');
+function renderRelayPrompt(humanId: string, assignee: string | null, title: string): string {
+  if (!assignee) {
+    return `${humanId} — needs an assignee before relay.\n\nTitle: ${title}\n\nAssign on the board (or via PATCH) before generating the relay prompt.\n`;
   }
+  return `${humanId} — pull from board.
+
+You have a new ticket assigned. Pull it now:
+
+  curl -H "x-pp-agent-token: $AGENT_API_TOKEN" -H "x-pp-agent-id: ${assignee}" \\
+    https://admin.printpepper.co.uk/api/admin/tickets/queue?assignee=${assignee}
+
+Read the body, references, and last 10 comments. Move to In Progress (POST /start). Work in lane. Post your CEO summary as a comment on the ticket. Hand off (POST /handoff) when done.
+
+Title: ${title}
+`;
 }
 
-// ─── SDK MCP Tool Builder ───
-
-function buildSdkMcpTools(mcp: McpServer, z: typeof import('zod').z, toolFn: (...args: unknown[]) => unknown): unknown[] {
-  const tool = toolFn as (
-    name: string,
-    description: string,
-    schema: Record<string, unknown>,
-    handler: (args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text: string }> }>,
-  ) => unknown;
-
-  return [
-    tool('tasks_list', 'List tasks from TASKS.md, optionally filtered by status', {
-      status: z.enum(['planned', 'active', 'done', 'failed']).optional(),
-    }, async (args) => mcp.handleToolCall('tasks_list', args)),
-
-    tool('tasks_create', 'Create a new task in Planned status. Use dependsOn to chain tasks.', {
-      title: z.string(),
-      description: z.string().optional(),
-      model: z.enum(['opus', 'sonnet', 'haiku']).optional(),
-      priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
-      maxBudgetUsd: z.number().optional(),
-      dependsOn: z.array(z.string()).optional(),
-    }, async (args) => mcp.handleToolCall('tasks_create', args)),
-
-    tool('tasks_update', 'Update a task status, notes, priority, or model', {
-      taskId: z.string(),
-      status: z.enum(['planned', 'active', 'done', 'failed']).optional(),
-      notes: z.string().optional(),
-      priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
-      model: z.enum(['opus', 'sonnet', 'haiku']).optional(),
-    }, async (args) => mcp.handleToolCall('tasks_update', args)),
-
-    tool('spawn_worker', 'Spawn a temporary worker agent for a specific planned task', {
-      taskId: z.string(),
-    }, async (args) => mcp.handleToolCall('spawn_worker', args)),
-
-    tool('worker_status', 'Check if a worker is running, its elapsed time and token spend', {
-      agentId: z.string(),
-    }, async (args) => mcp.handleToolCall('worker_status', args)),
-
-    tool('kill_worker', 'Force-stop a running worker', {
-      agentId: z.string(),
-    }, async (args) => mcp.handleToolCall('kill_worker', args)),
-
-    tool('list_workers', 'List all active workers with task, runtime, and cost', {}, async (args) => mcp.handleToolCall('list_workers', args)),
-
-    tool('read_worker_output', 'Read output files from a completed worker task', {
-      taskId: z.string(),
-    }, async (args) => mcp.handleToolCall('read_worker_output', args)),
-
-    tool('run_skill', 'Run a premade skill (red-team, security-scan, code-review, brand-audit, content-review, test-suite)', {
-      skillName: z.string(),
-      config: z.record(z.string(), z.string()).optional(),
-    }, async (args) => mcp.handleToolCall('run_skill', args)),
-  ];
+function handleErr(res: express.Response, err: unknown): void {
+  if (err instanceof BoardError) {
+    res.status(err.status).json({ error: 'upstream_error', status: err.status, body: err.body });
+    return;
+  }
+  res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
 }
 
 main().catch((err) => {
-  console.error('Fatal error:', err);
+  console.error('Fatal:', err);
   process.exit(1);
 });
