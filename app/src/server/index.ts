@@ -18,6 +18,7 @@ import { Notifier } from './notifier.js';
 import { EventEmitter } from './events.js';
 import { summariseCost } from './cost.js';
 import { buildKickoffPrompt, ALLOWED_AGENT_CODES_FOR_KICKOFF } from './kickoff.js';
+import { buildPrecompactPrompt, ALLOWED_AGENT_CODES_FOR_PRECOMPACT } from './precompact.js';
 import { PresenceHeartbeat } from './presence-heartbeat.js';
 import { PresencePoller } from './presence-poller.js';
 import type { AgentCode, AuditRow, MissionConfig, Ticket, WsMessage } from './types.js';
@@ -296,6 +297,15 @@ async function main() {
       return res.status(400).json({ error: 'unknown agent code' });
     }
     const prompt = buildKickoffPrompt(code);
+    res.json({ agentCode: code, prompt });
+  });
+
+  app.get('/api/agents/:code/precompact', (req, res) => {
+    const code = req.params.code.toUpperCase() as AgentCode;
+    if (!ALLOWED_AGENT_CODES_FOR_PRECOMPACT.includes(code)) {
+      return res.status(400).json({ error: 'unknown agent code (PETER excluded — human, no pre-compact)' });
+    }
+    const prompt = buildPrecompactPrompt(code);
     res.json({ agentCode: code, prompt });
   });
 

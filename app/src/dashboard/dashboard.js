@@ -186,7 +186,8 @@ function renderAgents() {
         <span class="agent-emoji">${a.emoji}</span>
         <span class="agent-code">${a.code}</span>
         <span class="agent-meta">${a.current ? `${a.current.ticket_human_id} · ${a.current.status.replace('_',' ')}` : 'no blockers'}</span>
-        <span class="human-tag" title="Peter is a human assignee — no kickoff or pause needed">human</span>
+        <span class="human-tag" title="Peter is a human assignee — no kickoff, pre-compact, or pause needed">human</span>
+        <span></span>
         <span></span>
         <span class="presence static" title="static — Peter doesn't heartbeat"></span>
         <span class="light" data-state="${a.light}" title="${a.light}"></span>
@@ -200,23 +201,39 @@ function renderAgents() {
       <span class="agent-code">${a.code}${isPaused ? ' <span class="pause-badge" title="' + escapeHtml(pauseTitle) + '">⏸</span>' : ''}</span>
       <span class="agent-meta">${a.current ? `${a.current.ticket_human_id} · ${a.current.status.replace('_',' ')}` : 'idle'}</span>
       <button class="copy-kickoff" data-agent="${a.code}" title="Copy kickoff prompt for ${a.code}" type="button">📋</button>
+      <button class="copy-precompact" data-agent="${a.code}" title="Pre-compact ${a.code}" type="button">📦</button>
       <button class="pause-btn" data-agent="${a.code}" title="${escapeHtml(isPaused ? 'Resume agent' : pauseTitle)}" type="button">${isPaused ? '▶' : '⏸'}</button>
       <span class="presence" data-state="${isAlive ? 'on' : 'off'}" title="${isAlive ? 'alive (heartbeat < 60s)' : 'silent'}"></span>
       <span class="light" data-state="${a.light}" title="${a.light}"></span>
     `;
     li.addEventListener('click', (e) => {
-      if (e.target.closest('.copy-kickoff') || e.target.closest('.pause-btn')) return;
+      if (e.target.closest('.copy-kickoff') || e.target.closest('.copy-precompact') || e.target.closest('.pause-btn')) return;
       openSoul(a.code);
     });
     li.querySelector('.copy-kickoff').addEventListener('click', (e) => {
       e.stopPropagation();
       copyKickoffPrompt(a.code);
     });
+    li.querySelector('.copy-precompact').addEventListener('click', (e) => {
+      e.stopPropagation();
+      copyPrecompactPrompt(a.code);
+    });
     li.querySelector('.pause-btn').addEventListener('click', (e) => {
       e.stopPropagation();
       togglePause(a.code, isPaused);
     });
     ul.appendChild(li);
+  }
+}
+
+async function copyPrecompactPrompt(code) {
+  try {
+    const r = await fetch(`/api/agents/${encodeURIComponent(code)}/precompact`).then((r) => r.json());
+    if (!r.prompt) throw new Error('empty pre-compact');
+    await navigator.clipboard.writeText(r.prompt);
+    toast(`Pre-compact for ${code} copied — paste into the agent's terminal`, 'success');
+  } catch (err) {
+    toast('Pre-compact copy failed: ' + (err.message || err), 'error');
   }
 }
 

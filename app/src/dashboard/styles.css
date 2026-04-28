@@ -234,9 +234,9 @@ ul { list-style: none; padding: 0; margin: 0; }
 .agent-list { display: flex; flex-direction: column; gap: 6px; }
 .agent-card {
   display: grid;
-  grid-template-columns: 22px auto 1fr auto auto auto auto;
+  grid-template-columns: 22px auto 1fr auto auto auto auto auto;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -317,6 +317,19 @@ ul { list-style: none; padding: 0; margin: 0; }
 }
 .agent-card:hover .copy-kickoff { opacity: 1; }
 .copy-kickoff:hover { color: var(--pepper); border-color: var(--border-strong); }
+.copy-precompact {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-low);
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+}
+.agent-card:hover .copy-precompact { opacity: 1; }
+.copy-precompact:hover { color: var(--amber); border-color: var(--border-strong); }
 .agent-emoji { font-size: 16px; }
 .agent-code { font-weight: 700; font-size: 12px; }
 .agent-meta { font-size: 11px; color: var(--text-mid); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
