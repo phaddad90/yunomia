@@ -34,13 +34,14 @@ const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
   try {
     const me = await fetch('/api/me').then((r) => r.json());
     state.me = me.agentCode || 'TA';
-    $('#who-agent').textContent = `${AGENT_EMOJI[state.me] || ''} ${state.me}`;
+    populateIdentityDropdown(me.allowed || ['SA','AD','WA','DA','QA','WD','CEO','TA'], state.me);
   } catch { /* keep default */ }
 
   bindUi();
   connectWs();
   await refreshBoard();
   await refreshInbox();
+  await refreshCost();
 })();
 
 // ─── UI bindings ───
@@ -66,6 +67,13 @@ function bindUi() {
   $('#btn-screenshot').addEventListener('click', () => $('#file-input').click());
   $('#file-input').addEventListener('change', handleFileAttach);
   $('#btn-voice').addEventListener('click', toggleVoice);
+
+  // Identity switcher
+  $('#who-select').addEventListener('change', (e) => switchIdentity(e.target.value));
+
+  // Cost pill + modal
+  $('#cost-pill').addEventListener('click', openCostModal);
+  $$('#cost-modal [data-close="1"]').forEach((el) => el.addEventListener('click', closeCostModal));
 
   // Inbox pill + modal
   $('#inbox-pill').addEventListener('click', openInboxModal);
@@ -107,6 +115,8 @@ function connectWs() {
                                  maybeFullRefresh(msg.data?.reason); break;
         case 'audit_event':      prependActivity(msg.data); break;
         case 'inbox_changed':    updateInboxPill(msg.data.unprocessed); break;
+        case 'identity_changed': handleIdentityChanged(msg.data); break;
+        case 'cost_changed':     updateCostPill(msg.data); break;
         case 'toast':            toast(msg.data.text, msg.data.kind); break;
         default: break;
       }
@@ -546,6 +556,113 @@ function toggleVoice() {
   recog.start();
   recogActive = true;
   $('#btn-voice').classList.add('btn-voice-on');
+}
+
+// ─── Identity switcher (PH-069 v0.3.0) ───
+
+function populateIdentityDropdown(allowed, current) {
+  const sel = $('#who-select');
+  sel.innerHTML = '';
+  for (const code of allowed) {
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = `${AGENT_EMOJI[code] || ''} ${code}`;
+    if (code === current) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+async function switchIdentity(code) {
+  if (!code || code === state.me) return;
+  try {
+    const r = await fetch('/api/me', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentCode: code }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || `identity ${r.status}`);
+    }
+    const data = await r.json();
+    state.me = data.agentCode;
+    toast(`Identity → ${data.agentCode}`, 'success');
+    refreshBoard();
+    refreshInbox();
+  } catch (err) {
+    toast('Switch failed: ' + (err.message || err), 'error');
+    populateIdentityDropdown(['SA','AD','WA','DA','QA','WD','CEO','TA'], state.me);
+  }
+}
+
+function handleIdentityChanged({ agentCode }) {
+  state.me = agentCode;
+  $('#who-select').value = agentCode;
+  // The "My inbox" tab is filtered by current identity; refresh it.
+  renderInbox();
+}
+
+// ─── Cost telemetry (PH-069 v0.3.0) ───
+
+async function refreshCost() {
+  try {
+    const r = await fetch('/api/cost/summary').then((r) => r.json());
+    state.cost = r;
+    updateCostPill({ todayUsd: r.totals?.todayUsd ?? 0, thirtyDayUsd: r.totals?.thirtyDayUsd ?? 0 });
+    if (!$('#cost-modal').classList.contains('hidden')) renderCostModal();
+  } catch { /* offline ok */ }
+}
+
+function updateCostPill({ todayUsd, thirtyDayUsd }) {
+  $('#cost-pill').hidden = false;
+  $('#cost-today').textContent = `$${(todayUsd ?? 0).toFixed(2)}`;
+  $('#cost-30d').textContent = `$${(thirtyDayUsd ?? 0).toFixed(2)}`;
+}
+
+async function openCostModal() {
+  await refreshCost();
+  renderCostModal();
+  $('#cost-modal').classList.remove('hidden');
+}
+
+function closeCostModal() {
+  $('#cost-modal').classList.add('hidden');
+}
+
+function renderCostModal() {
+  const data = state.cost;
+  if (!data) return;
+  $('#cost-modal-foot').textContent = `${data.totals.fires} fires logged`;
+  const totals = $('#cost-totals');
+  totals.innerHTML = '';
+  for (const [label, value] of [
+    ['Today', `$${data.totals.todayUsd.toFixed(2)}`],
+    ['30-day projection', `$${data.totals.thirtyDayUsd.toFixed(2)}`],
+    ['Per-fire', `$${data.perFireUsd.toFixed(4)}`],
+  ]) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b>`;
+    totals.appendChild(li);
+  }
+  const ul = $('#cost-rows');
+  ul.innerHTML = '';
+  if (!data.perAgent.length) {
+    const li = document.createElement('li');
+    li.innerHTML = `<div></div><div>No heartbeat logs yet.</div><div></div><div></div><div></div>`;
+    ul.appendChild(li);
+    return;
+  }
+  for (const r of data.perAgent) {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <span class="agent-emoji">${AGENT_EMOJI[r.agent] || ''}</span>
+      <span><b>${escapeHtml(r.agent)}</b><br><span class="meta">${r.fires} fires · ${r.firesToday} today</span></span>
+      <span class="meta">${r.lastFireAt ? formatTime(r.lastFireAt) : '—'}</span>
+      <span class="usd">$${r.estimatedUsdToday.toFixed(2)}<span class="meta"> today</span></span>
+      <span class="usd">$${r.estimatedUsd.toFixed(2)}<span class="meta"> total</span></span>
+    `;
+    ul.appendChild(li);
+  }
 }
 
 // ─── Granular WS handlers (PH-052) ───

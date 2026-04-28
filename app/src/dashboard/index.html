@@ -17,6 +17,12 @@
       <span class="brand-name">Mission Control</span>
       <span class="brand-sub">PrintPepper</span>
     </div>
+    <button id="cost-pill" class="cost-pill" type="button" hidden>
+      <span>🔥</span>
+      <span>Today: <b id="cost-today">$—</b></span>
+      <span class="cost-sep">·</span>
+      <span>30d: <b id="cost-30d">$—</b></span>
+    </button>
     <button id="inbox-pill" class="inbox-pill" type="button" hidden>
       <span class="bell">🔔</span>
       <span class="inbox-text">CEO Inbox: <b id="inbox-pill-count">0</b></span>
@@ -27,7 +33,9 @@
     </div>
     <div class="who">
       <span class="who-label">you are</span>
-      <span id="who-agent" class="who-agent">—</span>
+      <select id="who-select" class="who-select" aria-label="Identity">
+        <option value="" disabled>—</option>
+      </select>
     </div>
   </header>
 
@@ -153,6 +161,24 @@
       <button id="side-done" class="btn-secondary">Done</button>
     </footer>
   </aside>
+
+  <!-- Cost telemetry modal -->
+  <div id="cost-modal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal-card">
+      <header>
+        <h3>Token cost (estimate)</h3>
+        <span id="cost-modal-foot" class="pill"></span>
+        <button class="btn-ghost" data-close="1" type="button">✕</button>
+      </header>
+      <div class="cost-body">
+        <ul id="cost-totals" class="cost-totals"></ul>
+        <h4 class="cost-section">Per-agent</h4>
+        <ul id="cost-rows" class="cost-rows"></ul>
+        <p class="cost-foot">Estimate. Per-fire token mix from <code>heartbeat-simulate.ts</code> defaults — refines once empirical PH-045 capture lands.</p>
+      </div>
+    </div>
+  </div>
 
   <!-- CEO inbox modal -->
   <div id="inbox-modal" class="modal hidden" aria-hidden="true">

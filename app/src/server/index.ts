@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 
 import { initLogger } from './logger.js';
+import { loadLocalConfig, saveLocalConfig } from './local-config.js';
 import { PrintPepperBoardClient, BoardError } from './board-client.js';
 import { AuditPoller } from './audit-poller.js';
 import { deriveAgentStates } from './agent-state.js';
@@ -15,6 +16,7 @@ import { InboxStore, shouldNotifyCeo, summaryFor } from './inbox.js';
 import type { InboxEntry, NormalizedEvent } from './inbox.js';
 import { Notifier } from './notifier.js';
 import { EventEmitter } from './events.js';
+import { summariseCost } from './cost.js';
 import type { AgentCode, AuditRow, MissionConfig, Ticket, WsMessage } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,7 +32,12 @@ function parseConfig(): MissionConfig {
     if (args[i] === '--port' && args[i + 1]) port = parseInt(args[++i], 10);
     if (args[i] === '--agent' && args[i + 1]) agentCode = args[++i] as AgentCode;
   }
+  // Precedence: env > flag > persisted local config > default.
   if (process.env.PP_AGENT_CODE) agentCode = process.env.PP_AGENT_CODE as AgentCode;
+  else {
+    const stored = loadLocalConfig().agentCode;
+    if (stored) agentCode = stored;
+  }
 
   // Optional config file (next to the project root) for non-secret tweaks
   const configPath = join(process.cwd(), 'mission-control.config.json');
@@ -60,7 +67,11 @@ async function main() {
 
   logger.info({ port: config.port, apiBase: config.apiBase, agent: config.agentCode }, 'Mission Control starting');
 
-  const board = new PrintPepperBoardClient(config.apiBase, config.agentToken, config.agentCode);
+  // Mutable identity ref — the v0.3 dropdown switcher updates this in place
+  // without recreating the board client (so the audit poller, inbox, events
+  // emitter, and webhook receiver all immediately use the new code).
+  const identity = { current: config.agentCode };
+  const board = new PrintPepperBoardClient(config.apiBase, config.agentToken, identity);
   const inbox = new InboxStore(undefined, logger);
   inbox.init();
   const notifier = new Notifier(logger);
@@ -122,9 +133,28 @@ async function main() {
   const staticDir = existsSync(dashboardDir) ? dashboardDir : join(__dirname, '..', '..', 'src', 'dashboard');
   app.use(express.static(staticDir));
 
-  // Identity (used by dashboard)
+  // Identity (used by dashboard) — current value reads through the live ref.
+  const ALLOWED_AGENT_CODES: AgentCode[] = ['SA', 'AD', 'WA', 'DA', 'QA', 'WD', 'CEO', 'TA'];
   app.get('/api/me', (_req, res) => {
-    res.json({ agentCode: config.agentCode, apiBase: config.apiBase });
+    res.json({
+      agentCode: identity.current,
+      apiBase: config.apiBase,
+      allowed: ALLOWED_AGENT_CODES,
+    });
+  });
+
+  app.post('/api/me', (req, res) => {
+    const next = req.body?.agentCode;
+    if (typeof next !== 'string' || !ALLOWED_AGENT_CODES.includes(next as AgentCode)) {
+      return res.status(400).json({ error: 'agentCode must be one of ' + ALLOWED_AGENT_CODES.join(', ') });
+    }
+    if (next === identity.current) return res.json({ agentCode: identity.current, changed: false });
+    const prev = identity.current;
+    identity.current = next as AgentCode;
+    saveLocalConfig({ agentCode: identity.current });
+    logger.info({ prev, next: identity.current }, 'identity changed');
+    broadcast({ type: 'identity_changed', data: { agentCode: identity.current, previous: prev } });
+    res.json({ agentCode: identity.current, previous: prev, changed: true });
   });
 
   // ─── Board read-through (browser hits local server, server hits PrintPepper) ───
@@ -308,6 +338,11 @@ async function main() {
     });
   });
 
+  // ─── Cost telemetry (PH-069 v0.3.0) ───
+  app.get('/api/cost/summary', (_req, res) => {
+    res.json(summariseCost());
+  });
+
   app.post('/api/inbox/processed', (req, res) => {
     const ids = Array.isArray(req.body?.delivery_ids) ? req.body.delivery_ids.map(String) : [];
     if (!ids.length) return res.status(400).json({ error: 'delivery_ids required' });
@@ -317,7 +352,7 @@ async function main() {
   });
 
   // Health
-  app.get('/health', (_req, res) => res.json({ status: 'ok', agent: config.agentCode, apiBase: config.apiBase, inbox: inbox.unprocessedCount() }));
+  app.get('/health', (_req, res) => res.json({ status: 'ok', agent: identity.current, apiBase: config.apiBase, inbox: inbox.unprocessedCount() }));
 
   // ─── HTTP + WS ───
 
@@ -327,7 +362,7 @@ async function main() {
 
   wss.on('connection', (ws) => {
     clients.add(ws);
-    send(ws, { type: 'hello', data: { agentCode: config.agentCode, serverTime: new Date().toISOString() } });
+    send(ws, { type: 'hello', data: { agentCode: identity.current, serverTime: new Date().toISOString() } });
     ws.on('close', () => clients.delete(ws));
   });
 

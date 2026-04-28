@@ -14,8 +14,15 @@ export class PrintPepperBoardClient {
   constructor(
     private apiBase: string,
     private token: string,
-    private agentCode: AgentCode,
+    /** Mutable: identity-switcher in v0.3.0 changes this at runtime. Pass a getter
+     * if the host needs to swap codes without recreating the client. */
+    private agentCodeRef: { current: AgentCode } | AgentCode,
   ) {}
+
+  /** Currently active agent code. Reads through the live ref each call. */
+  get agentCode(): AgentCode {
+    return typeof this.agentCodeRef === 'string' ? this.agentCodeRef : this.agentCodeRef.current;
+  }
 
   private async req<T>(path: string, init: RequestInit = {}): Promise<T> {
     const url = `${this.apiBase}${path}`;

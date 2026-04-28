@@ -80,6 +80,8 @@ export type WsMessage =
   | { type: 'audit_event'; data: AuditRow }
   | { type: 'agent_state'; data: AgentState[] }
   | { type: 'inbox_changed'; data: { unprocessed: number } }
+  | { type: 'identity_changed'; data: { agentCode: AgentCode; previous: AgentCode } }
+  | { type: 'cost_changed'; data: { todayUsd: number; thirtyDayUsd: number } }
   | { type: 'toast'; data: { kind: 'info' | 'error' | 'success'; text: string } };
 
 export interface AgentState {

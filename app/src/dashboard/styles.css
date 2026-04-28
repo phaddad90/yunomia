@@ -129,7 +129,69 @@ ul { list-style: none; padding: 0; margin: 0; }
 }
 .who { display: flex; align-items: center; gap: 6px; padding-left: 16px; border-left: 1px solid var(--border); font-size: 12px; }
 .who-label { color: var(--text-mid); }
-.who-agent { font-weight: 600; }
+.who-select {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+.who-select:hover { border-color: var(--pepper); color: var(--pepper); }
+.who-select:focus { border-color: var(--pepper); }
+
+.cost-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px; font-weight: 500;
+  cursor: pointer;
+  transition: transform 0.08s, border-color 0.12s;
+}
+.cost-pill:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.cost-pill .cost-sep { color: var(--text-low); }
+.cost-pill b { color: var(--pepper); font-weight: 700; }
+
+.cost-body { padding: 8px 18px 18px; overflow-y: auto; }
+.cost-totals {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 0; margin: 0 0 16px;
+}
+.cost-totals li {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.cost-totals span { font-size: 11px; color: var(--text-mid); }
+.cost-totals b { font-size: 17px; font-weight: 700; color: var(--text); }
+.cost-section {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-mid); margin: 8px 0;
+}
+.cost-rows { display: flex; flex-direction: column; gap: 4px; }
+.cost-rows li {
+  display: grid;
+  grid-template-columns: 32px 1fr auto auto auto;
+  gap: 12px;
+  align-items: center;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 12.5px;
+}
+.cost-rows .agent-emoji { font-size: 14px; }
+.cost-rows .meta { color: var(--text-mid); font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.cost-rows .usd { font-weight: 700; }
+.cost-foot { font-size: 11px; color: var(--text-low); margin: 12px 0 0; }
+.cost-foot code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
 
 /* ─── Layout ─── */
 .layout {
