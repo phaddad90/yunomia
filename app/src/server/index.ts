@@ -142,7 +142,16 @@ async function main() {
   });
 
   app.get('/api/board/tickets/:id', async (req, res) => {
-    try { res.json(await board.getTicket(req.params.id)); } catch (err) { handleErr(res, err); }
+    try {
+      // Single-ticket admin endpoint returns { ticket, audit } only; comments
+      // live behind a separate route. Fetch both in parallel and merge so the
+      // dashboard side panel can render the comm-layer in one round-trip.
+      const [main, comments] = await Promise.all([
+        board.getTicket(req.params.id),
+        board.listComments(req.params.id).catch(() => [] as Awaited<ReturnType<typeof board.listComments>>),
+      ]);
+      res.json({ ticket: main.ticket, audit: main.audit, comments });
+    } catch (err) { handleErr(res, err); }
   });
 
   app.get('/api/board/queue/:agent', async (req, res) => {

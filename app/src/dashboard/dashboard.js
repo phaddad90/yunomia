@@ -96,7 +96,7 @@ function connectWs() {
   ws.addEventListener('message', (e) => {
     try {
       const msg = JSON.parse(e.data);
-      if (msg.type === 'tickets_changed') refreshBoard();
+      if (msg.type === 'tickets_changed') { refreshBoard(); refreshOpenTicket(); }
       else if (msg.type === 'audit_event') prependActivity(msg.data);
       else if (msg.type === 'inbox_changed') updateInboxPill(msg.data.unprocessed);
       else if (msg.type === 'toast') toast(msg.data.text, msg.data.kind);
@@ -321,10 +321,26 @@ async function openTicket(id) {
     $('#side-id').textContent = t.ticket_human_id;
     $('#side-status').textContent = t.status.replace('_', ' ');
     $('#side-status').className = 'status-pill ' + t.status;
-    $('#side-body').innerHTML = renderTicketDetail(t, r.audit || []);
+    $('#side-body').innerHTML = renderTicketDetail(t, r.audit || [], r.comments || []);
   } catch (err) {
     $('#side-body').textContent = 'Failed to load: ' + (err.message || err);
   }
+}
+
+// Re-fetch the open ticket (silently — keep scroll/focus, no flash) when WS
+// signals board-side activity. Dashboard already calls refreshBoard()
+// for the kanban; this keeps the side panel synced for the comms layer.
+async function refreshOpenTicket() {
+  const id = state.selectedTicketId;
+  if (!id) return;
+  try {
+    const r = await fetch(`/api/board/tickets/${id}`).then((r) => r.json());
+    const t = r.ticket;
+    $('#side-id').textContent = t.ticket_human_id;
+    $('#side-status').textContent = t.status.replace('_', ' ');
+    $('#side-status').className = 'status-pill ' + t.status;
+    $('#side-body').innerHTML = renderTicketDetail(t, r.audit || [], r.comments || []);
+  } catch { /* silent */ }
 }
 
 function closeSidePanel() {
@@ -332,14 +348,18 @@ function closeSidePanel() {
   state.selectedTicketId = null;
 }
 
-function renderTicketDetail(t, audit) {
+function renderTicketDetail(t, audit, commentsArr) {
   const refs = (() => { try { return JSON.parse(t.references_json || '[]'); } catch { return []; } })();
   const refList = refs.length ? `<h4>References</h4><ul>${refs.map((r) => `<li>${escapeHtml(typeof r === 'string' ? r : JSON.stringify(r))}</li>`).join('')}</ul>` : '';
-  const recent = (t.recent_comments || []).slice().reverse();
-  const comments = recent.map((c) => `
+  // PH-051: comments come from {ticket, audit, comments} now. Oldest-first
+  // matches the API order so verdicts read top-to-bottom in chronological
+  // order (the comm layer relies on this — readers should see SA → AD → QA
+  // top-down, not the reverse).
+  const list = (commentsArr || []).slice().sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+  const comments = list.map((c) => `
     <div class="comment">
-      <div class="who">${escapeHtml(c.author_label || c.author_kind)} · ${formatTime(c.created_at)}</div>
-      ${escapeHtml(c.body_md)}
+      <div class="who">${escapeHtml(c.author_label || c.author_kind || '')} · ${formatTime(c.created_at)}</div>
+      ${escapeHtml(c.body_md || '')}
     </div>
   `).join('');
   return `
@@ -351,7 +371,7 @@ function renderTicketDetail(t, audit) {
     <pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:8px">${escapeHtml(t.body_md || '')}</pre>
     ${refList}
     <div class="comments">
-      <h4>Recent comments (${recent.length})</h4>
+      <h4>Comments (${list.length})</h4>
       ${comments || '<div style="color:var(--text-low);font-size:12px">No comments yet.</div>'}
     </div>
   `;

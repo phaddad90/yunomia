@@ -59,6 +59,11 @@ export class PrintPepperBoardClient {
     return this.req(`/api/admin/tickets/${encodeURIComponent(id)}`);
   }
 
+  async listComments(ticketId: string): Promise<TicketComment[]> {
+    const r = await this.req<{ comments: TicketComment[] }>(`/api/admin/tickets/${encodeURIComponent(ticketId)}/comments`);
+    return r.comments || [];
+  }
+
   async getQueue(assignee: AgentCode): Promise<Ticket[]> {
     const r = await this.req<{ queue: Ticket[] }>(`/api/admin/tickets/queue?assignee=${assignee}`);
     return r.queue || [];
