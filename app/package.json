@@ -8,6 +8,8 @@
     "dev": "node --import tsx src/server/index.ts",
     "start": "node dist/server/index.js",
     "drain-inbox": "node --import tsx scripts/drain-inbox.ts",
+    "heartbeat-simulate": "node --import tsx scripts/heartbeat-simulate.ts",
+    "heartbeat-capture": "node --import tsx scripts/heartbeat-capture.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
