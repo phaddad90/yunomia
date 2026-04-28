@@ -42,7 +42,6 @@ const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
   connectWs();
   await refreshBoard();
   await refreshInbox();
-  await refreshCost();
   await refreshPresence();
 })();
 
@@ -56,8 +55,17 @@ function bindUi() {
       const which = btn.dataset.tab;
       $$('.tab-panel').forEach((p) => p.classList.toggle('hidden', p.id !== `panel-${which}`));
       if (which === 'reports') renderReports();
+      if (which === 'lessons') refreshLessons();
     });
   });
+
+  // Lessons tab — search, filter, new
+  $('#lessons-q').addEventListener('input', debounce(refreshLessons, 200));
+  $('#lessons-severity').addEventListener('change', refreshLessons);
+  $('#lessons-tag').addEventListener('input', debounce(refreshLessons, 200));
+  $('#lessons-new').addEventListener('click', () => openLessonModal());
+  $$('#lesson-modal [data-close="1"]').forEach((el) => el.addEventListener('click', closeLessonModal));
+  $('#lesson-form').addEventListener('submit', (e) => { e.preventDefault(); submitLesson(); });
 
   $('#refresh').addEventListener('click', refreshBoard);
   $('#filter-audience').addEventListener('change', (e) => { state.filters.audience = e.target.value; renderBoard(); });
@@ -72,10 +80,6 @@ function bindUi() {
 
   // Identity switcher
   $('#who-select').addEventListener('change', (e) => switchIdentity(e.target.value));
-
-  // Cost pill + modal
-  $('#cost-pill').addEventListener('click', openCostModal);
-  $$('#cost-modal [data-close="1"]').forEach((el) => el.addEventListener('click', closeCostModal));
 
   // Inbox pill + modal
   $('#inbox-pill').addEventListener('click', openInboxModal);
@@ -118,7 +122,6 @@ function connectWs() {
         case 'audit_event':      prependActivity(msg.data); break;
         case 'inbox_changed':    updateInboxPill(msg.data.unprocessed); break;
         case 'identity_changed': handleIdentityChanged(msg.data); break;
-        case 'cost_changed':     updateCostPill(msg.data); break;
         case 'presence_changed': handlePresence(msg.data?.presence || []); break;
         case 'toast':            toast(msg.data.text, msg.data.kind); break;
         default: break;
@@ -334,18 +337,63 @@ function renderBundle() {
 
 // ─── Board (kanban) ───
 
+// PH-094: Done + Released default-collapsed with localStorage persistence.
+const COLLAPSIBLE_COLS = new Set(['done', 'released']);
+function isColCollapsed(colId) {
+  if (!COLLAPSIBLE_COLS.has(colId)) return false;
+  const stored = localStorage.getItem(`mc.collapsed.${colId}`);
+  if (stored === null) return true;   // default: collapsed
+  return stored === '1';
+}
+function setColCollapsed(colId, collapsed) {
+  localStorage.setItem(`mc.collapsed.${colId}`, collapsed ? '1' : '0');
+}
+const SHOW_LIMIT_WHEN_EXPANDED = 10;
+
 function renderBoard() {
   const root = $('#kanban');
   root.innerHTML = '';
   const filtered = state.tickets.filter(matchFilters);
   for (const col of COLUMNS) {
     const cards = filtered.filter((t) => t.status === col.id);
+    const collapsible = COLLAPSIBLE_COLS.has(col.id);
+    const collapsed = collapsible && isColCollapsed(col.id);
+    const showAll = collapsible && state.colShowAll?.[col.id];
     const colEl = document.createElement('div');
-    colEl.className = 'col';
-    colEl.innerHTML = `<div class="col-head"><span>${col.label}</span><span class="count">${cards.length}</span></div>`;
-    for (const t of cards) colEl.appendChild(renderTicketCard(t));
+    colEl.className = 'col' + (collapsed ? ' collapsed' : '');
+    const arrow = collapsible ? `<button class="col-toggle" data-col="${col.id}" type="button">${collapsed ? '▶' : '▼'}</button>` : '';
+    colEl.innerHTML = `<div class="col-head">${arrow}<span>${col.label}</span><span class="count">${cards.length}</span></div>`;
+    if (!collapsed) {
+      // Newest-first within done/released so the latest closes float to the top.
+      const ordered = collapsible
+        ? cards.slice().sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
+        : cards;
+      const limit = (collapsible && !showAll) ? SHOW_LIMIT_WHEN_EXPANDED : ordered.length;
+      const visible = ordered.slice(0, limit);
+      for (const t of visible) colEl.appendChild(renderTicketCard(t));
+      if (collapsible && ordered.length > visible.length) {
+        const more = document.createElement('button');
+        more.className = 'show-all';
+        more.type = 'button';
+        more.dataset.col = col.id;
+        more.textContent = `Show all ${ordered.length}`;
+        colEl.appendChild(more);
+      }
+    }
     root.appendChild(colEl);
   }
+  // Wire toggle + show-all buttons.
+  $$('#kanban .col-toggle').forEach((btn) => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const colId = btn.dataset.col;
+    setColCollapsed(colId, !isColCollapsed(colId));
+    renderBoard();
+  }));
+  $$('#kanban .show-all').forEach((btn) => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    state.colShowAll = { ...(state.colShowAll || {}), [btn.dataset.col]: true };
+    renderBoard();
+  }));
 }
 
 function matchFilters(t) {
@@ -549,31 +597,87 @@ async function openSoul(code) {
   const panel = $('#side-panel');
   panel.classList.remove('hidden');
   $('#side-id').textContent = code;
-  $('#side-status').textContent = 'soul';
+  $('#side-status').textContent = 'agent';
   $('#side-status').className = 'status-pill';
-  const ctaBar = `
+  // Action bar + Goals editor section + Soul preview. Goals editor mirrors
+  // the file-backed pattern shipped in PH-090 for kickoffs (textarea + Save).
+  $('#side-body').innerHTML = `
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px">
       <button class="btn-secondary" id="soul-copy-kickoff" type="button">📋 Copy kickoff prompt</button>
       <span style="font-size:11px;color:var(--text-mid)">Paste into a fresh Claude Code session</span>
     </div>
+    <section class="agent-section">
+      <h3 class="agent-section-h">Goals</h3>
+      <textarea id="goals-editor" rows="8" placeholder="Loading…"></textarea>
+      <div class="goals-controls">
+        <span id="goals-status" class="goals-status"></span>
+        <button id="goals-save" class="btn-primary" type="button" disabled>Save</button>
+      </div>
+    </section>
+    <section class="agent-section">
+      <h3 class="agent-section-h">Soul</h3>
+      <div id="soul-preview"><span style="color:var(--text-mid)">Loading…</span></div>
+    </section>
   `;
-  $('#side-body').innerHTML = ctaBar + 'Loading soul…';
   $('#soul-copy-kickoff').addEventListener('click', () => copyKickoffPrompt(code));
+  // Wire goals editor — fetch + populate + Save handler.
+  void hydrateGoalsEditor(code);
+  // Wire soul preview.
   try {
     const r = await fetch(`/api/agents/${code}/soul`);
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
-      $('#side-body').innerHTML = ctaBar + `<div style="color:var(--text-mid)">${escapeHtml(err.error || 'Soul file not available yet.')}</div>`;
-      $('#soul-copy-kickoff').addEventListener('click', () => copyKickoffPrompt(code));
+      $('#soul-preview').innerHTML = `<div style="color:var(--text-mid)">${escapeHtml(err.error || 'Soul file not available.')}</div>`;
       return;
     }
     const md = await r.text();
-    $('#side-body').innerHTML = ctaBar + `<pre style="white-space:pre-wrap">${escapeHtml(md)}</pre>`;
-    $('#soul-copy-kickoff').addEventListener('click', () => copyKickoffPrompt(code));
+    $('#soul-preview').innerHTML = `<pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:8px">${escapeHtml(md)}</pre>`;
   } catch (err) {
-    $('#side-body').innerHTML = ctaBar + 'Failed: ' + escapeHtml(err.message || String(err));
-    $('#soul-copy-kickoff').addEventListener('click', () => copyKickoffPrompt(code));
+    $('#soul-preview').textContent = 'Failed: ' + (err.message || err);
   }
+}
+
+async function hydrateGoalsEditor(code) {
+  const ta = $('#goals-editor');
+  const saveBtn = $('#goals-save');
+  const status = $('#goals-status');
+  if (!ta || !saveBtn) return;
+  let originalGoals = '';
+  try {
+    const r = await fetch(`/api/agents/${encodeURIComponent(code)}/goals`).then((r) => r.json());
+    originalGoals = r.goals || '';
+    ta.value = originalGoals;
+    status.textContent = `source: ${r.source || '?'}`;
+  } catch (err) {
+    status.textContent = 'Failed to load goals: ' + (err.message || err);
+    return;
+  }
+  ta.addEventListener('input', () => {
+    saveBtn.disabled = (ta.value === originalGoals) || ta.value.length === 0;
+    status.textContent = saveBtn.disabled ? 'no changes' : 'edited — click Save';
+  });
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    status.textContent = 'saving…';
+    try {
+      const r = await fetch(`/api/agents/${encodeURIComponent(code)}/goals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goals: ta.value }),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error || `save ${r.status}`);
+      }
+      originalGoals = ta.value;
+      status.textContent = 'saved · file: ' + (await r.json()).path.split('/').pop();
+      toast(`Goals for ${code} saved`, 'success');
+    } catch (err) {
+      status.textContent = 'save failed';
+      toast('Goals save failed: ' + (err.message || err), 'error');
+      saveBtn.disabled = false;
+    }
+  });
 }
 
 // ─── Drop a Note ───
@@ -689,6 +793,182 @@ function toggleVoice() {
   $('#btn-voice').classList.add('btn-voice-on');
 }
 
+// ─── Lessons tab (PH-095) ───
+
+let lessonsLoading = false;
+async function refreshLessons() {
+  if (lessonsLoading) return;
+  lessonsLoading = true;
+  const ul = $('#lessons-list');
+  const empty = $('#lessons-empty');
+  try {
+    const params = new URLSearchParams();
+    const q = $('#lessons-q').value.trim();
+    const sev = $('#lessons-severity').value;
+    const tag = $('#lessons-tag').value.trim();
+    if (q) params.set('q', q);
+    if (sev) params.set('severity', sev);
+    if (tag) params.set('tag', tag);
+    const r = await fetch('/api/board/lessons?' + params.toString()).then((r) => r.json());
+    const lessons = r.lessons || r.rows || [];
+    state.lessons = lessons;
+    ul.innerHTML = '';
+    if (r.unavailable) {
+      empty.classList.remove('hidden');
+      empty.textContent = `Bug Lessons KB endpoint unavailable (${r.reason}). MC will populate this view automatically once SA's PH-088 deploys.`;
+      return;
+    }
+    if (!lessons.length) {
+      empty.classList.remove('hidden');
+      empty.textContent = q || sev || tag
+        ? 'No matching lessons.'
+        : 'No lessons captured yet. Lessons accumulate as bugs are fixed.';
+      return;
+    }
+    empty.classList.add('hidden');
+    for (const l of lessons) ul.appendChild(renderLessonCard(l));
+  } catch (err) {
+    empty.classList.remove('hidden');
+    empty.textContent = 'Lessons load failed: ' + (err.message || err);
+  } finally {
+    lessonsLoading = false;
+  }
+}
+
+function renderLessonCard(l) {
+  const tags = Array.isArray(l.tags) ? l.tags : (typeof l.tags === 'string' ? l.tags.split(',').map((s) => s.trim()).filter(Boolean) : []);
+  const sev = (l.severity || 'medium').toLowerCase();
+  const linked = l.ticket_human_id || l.ticket_ph || '';
+  const id = l.id || l.lesson_human_id || l.bl_id || '';
+  const title = l.symptom || l.title || '(no symptom)';
+  const li = document.createElement('li');
+  li.className = 'lesson-card';
+  li.innerHTML = `
+    <div class="lesson-row1">
+      <span class="lesson-id">${escapeHtml(String(id))}</span>
+      <span class="lesson-sev sev-${sev}">${escapeHtml(sev)}</span>
+      ${linked ? `<span class="lesson-linked">↪ ${escapeHtml(linked)}</span>` : ''}
+    </div>
+    <div class="lesson-symptom">${escapeHtml(title)}</div>
+    ${tags.length ? `<div class="lesson-tags">${tags.map((t) => `<span class="lesson-tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+  `;
+  li.addEventListener('click', () => openLessonDetail(l));
+  return li;
+}
+
+async function openLessonDetail(l) {
+  const panel = $('#side-panel');
+  panel.classList.remove('hidden');
+  $('#side-id').textContent = l.id || l.lesson_human_id || 'BL';
+  $('#side-status').textContent = l.severity || 'lesson';
+  $('#side-status').className = 'status-pill';
+  state.selectedTicketId = null; // not a ticket
+  $('#side-body').textContent = 'Loading…';
+  try {
+    const id = l.id || l.lesson_human_id || l.bl_id;
+    const full = id ? await fetch(`/api/board/lessons/${encodeURIComponent(String(id))}`).then((r) => r.json()) : { lesson: l };
+    const body = full.lesson || full.row || full;
+    $('#side-body').innerHTML = renderLessonDetail(body);
+  } catch {
+    $('#side-body').innerHTML = renderLessonDetail(l);
+  }
+}
+
+function renderLessonDetail(l) {
+  const tags = Array.isArray(l.tags) ? l.tags : (typeof l.tags === 'string' ? l.tags.split(',').map((s) => s.trim()).filter(Boolean) : []);
+  const sev = (l.severity || 'medium').toLowerCase();
+  const fields = [
+    ['Symptom', l.symptom],
+    ['Root cause', l.root_cause],
+    ['Fix', l.fix],
+    ['Files changed', l.files_changed],
+    ['How to recognise next time', l.recognise_pattern],
+    ['Prevent action', l.prevent_action],
+  ];
+  return `
+    <h2 style="margin:0 0 8px">${escapeHtml(l.symptom || l.title || 'Bug Lesson')}</h2>
+    <div style="font-size:12px;color:var(--text-mid);margin-bottom:14px">
+      <span class="lesson-sev sev-${sev}">${escapeHtml(sev)}</span>
+      ${l.ticket_human_id ? ' · ↪ ' + escapeHtml(l.ticket_human_id) : ''}
+      ${tags.length ? ' · ' + tags.map((t) => `<span class="lesson-tag">${escapeHtml(t)}</span>`).join(' ') : ''}
+    </div>
+    ${fields.map(([label, val]) => val ? `
+      <h4 style="font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-mid);margin:14px 0 6px">${escapeHtml(label)}</h4>
+      <pre style="white-space:pre-wrap;background:var(--surface-2);padding:10px 12px;border-radius:8px;font-size:12.5px">${escapeHtml(String(val))}</pre>
+    ` : '').join('')}
+  `;
+}
+
+// ─── Lesson modal (new + bug-close hook) ───
+
+function openLessonModal(prefill = {}) {
+  $('#lesson-symptom').value = prefill.symptom || '';
+  $('#lesson-sev').value = prefill.severity || 'medium';
+  $('#lesson-tags').value = prefill.tags || '';
+  $('#lesson-ticket').value = prefill.ticket_human_id || '';
+  $('#lesson-root').value = prefill.root_cause || '';
+  $('#lesson-fix').value = prefill.fix || '';
+  $('#lesson-files').value = prefill.files_changed || '';
+  $('#lesson-recognise').value = prefill.recognise_pattern || '';
+  $('#lesson-prevent').value = prefill.prevent_action || '';
+  $('#lesson-status').textContent = '';
+  $('#lesson-modal-title').textContent = prefill._fromTicket ? `Capture lesson from ${prefill.ticket_human_id}` : 'New Bug Lesson';
+  $('#lesson-modal').classList.remove('hidden');
+}
+
+function closeLessonModal() { $('#lesson-modal').classList.add('hidden'); }
+
+async function submitLesson() {
+  const status = $('#lesson-status');
+  status.textContent = 'saving…';
+  const body = {
+    symptom: $('#lesson-symptom').value.trim(),
+    severity: $('#lesson-sev').value,
+    tags: $('#lesson-tags').value.split(',').map((s) => s.trim()).filter(Boolean),
+    ticket_human_id: $('#lesson-ticket').value.trim() || null,
+    root_cause: $('#lesson-root').value,
+    fix: $('#lesson-fix').value,
+    files_changed: $('#lesson-files').value,
+    recognise_pattern: $('#lesson-recognise').value,
+    prevent_action: $('#lesson-prevent').value,
+  };
+  if (!body.symptom) { status.textContent = 'symptom required'; return; }
+  try {
+    const r = await fetch('/api/board/lessons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || `lesson ${r.status}`);
+    }
+    closeLessonModal();
+    toast('Lesson captured', 'success');
+    // Refresh if we're on the Lessons tab
+    if (!$('#panel-lessons').classList.contains('hidden')) refreshLessons();
+  } catch (err) {
+    status.textContent = 'failed: ' + (err.message || err);
+    toast('Lesson save failed: ' + (err.message || err), 'error');
+  }
+}
+
+// Bug-close hook: when a ticket transitions to `done` and type is bug, prompt
+// "Capture lesson?" with prefilled template. Wired into the granular WS event
+// stream so it fires for any ticket.changed → status: done with type: bug.
+function maybePromptLessonCapture(ticket) {
+  if (!ticket || ticket.type !== 'bug' || ticket.status !== 'done') return;
+  if (!confirm(`PH-${ticket.ticket_human_id || '?'} closed. Capture a Bug Lesson?`)) return;
+  openLessonModal({
+    _fromTicket: true,
+    ticket_human_id: ticket.ticket_human_id,
+    symptom: ticket.title || '',
+    severity: 'medium',
+    root_cause: '',
+    fix: '',
+  });
+}
+
 // ─── Identity switcher (PH-069 v0.3.0) ───
 
 function populateIdentityDropdown(allowed, current) {
@@ -731,69 +1011,6 @@ function handleIdentityChanged({ agentCode }) {
   $('#who-select').value = agentCode;
   // The "My inbox" tab is filtered by current identity; refresh it.
   renderInbox();
-}
-
-// ─── Cost telemetry (PH-069 v0.3.0) ───
-
-async function refreshCost() {
-  try {
-    const r = await fetch('/api/cost/summary').then((r) => r.json());
-    state.cost = r;
-    updateCostPill({ todayUsd: r.totals?.todayUsd ?? 0, thirtyDayUsd: r.totals?.thirtyDayUsd ?? 0 });
-    if (!$('#cost-modal').classList.contains('hidden')) renderCostModal();
-  } catch { /* offline ok */ }
-}
-
-function updateCostPill({ todayUsd, thirtyDayUsd }) {
-  $('#cost-pill').hidden = false;
-  $('#cost-today').textContent = `$${(todayUsd ?? 0).toFixed(2)}`;
-  $('#cost-30d').textContent = `$${(thirtyDayUsd ?? 0).toFixed(2)}`;
-}
-
-async function openCostModal() {
-  await refreshCost();
-  renderCostModal();
-  $('#cost-modal').classList.remove('hidden');
-}
-
-function closeCostModal() {
-  $('#cost-modal').classList.add('hidden');
-}
-
-function renderCostModal() {
-  const data = state.cost;
-  if (!data) return;
-  $('#cost-modal-foot').textContent = `${data.totals.fires} fires logged`;
-  const totals = $('#cost-totals');
-  totals.innerHTML = '';
-  for (const [label, value] of [
-    ['Today', `$${data.totals.todayUsd.toFixed(2)}`],
-    ['30-day projection', `$${data.totals.thirtyDayUsd.toFixed(2)}`],
-    ['Per-fire', `$${data.perFireUsd.toFixed(4)}`],
-  ]) {
-    const li = document.createElement('li');
-    li.innerHTML = `<span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b>`;
-    totals.appendChild(li);
-  }
-  const ul = $('#cost-rows');
-  ul.innerHTML = '';
-  if (!data.perAgent.length) {
-    const li = document.createElement('li');
-    li.innerHTML = `<div></div><div>No heartbeat logs yet.</div><div></div><div></div><div></div>`;
-    ul.appendChild(li);
-    return;
-  }
-  for (const r of data.perAgent) {
-    const li = document.createElement('li');
-    li.innerHTML = `
-      <span class="agent-emoji">${AGENT_EMOJI[r.agent] || ''}</span>
-      <span><b>${escapeHtml(r.agent)}</b><br><span class="meta">${r.fires} fires · ${r.firesToday} today</span></span>
-      <span class="meta">${r.lastFireAt ? formatTime(r.lastFireAt) : '—'}</span>
-      <span class="usd">$${r.estimatedUsdToday.toFixed(2)}<span class="meta"> today</span></span>
-      <span class="usd">$${r.estimatedUsd.toFixed(2)}<span class="meta"> total</span></span>
-    `;
-    ul.appendChild(li);
-  }
 }
 
 // ─── Granular WS handlers (PH-052) ───
@@ -848,7 +1065,12 @@ function handleTicketChanged({ ticket_id, after, fields_changed }) {
     refreshBoard();
     return;
   }
-  state.tickets[idx] = { ...state.tickets[idx], ...(after || {}) };
+  const before = state.tickets[idx];
+  state.tickets[idx] = { ...before, ...(after || {}) };
+  // PH-095: bug-close hook fires when type=bug + status flips to done
+  if (after && after.status === 'done' && before.status !== 'done') {
+    maybePromptLessonCapture(state.tickets[idx]);
+  }
   renderBoard();
   renderInbox();
   renderStats();

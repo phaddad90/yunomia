@@ -81,7 +81,6 @@ export type WsMessage =
   | { type: 'agent_state'; data: AgentState[] }
   | { type: 'inbox_changed'; data: { unprocessed: number } }
   | { type: 'identity_changed'; data: { agentCode: AgentCode; previous: AgentCode } }
-  | { type: 'cost_changed'; data: { todayUsd: number; thirtyDayUsd: number } }
   | { type: 'presence_changed'; data: { presence: AgentPresence[] } }
   | { type: 'toast'; data: { kind: 'info' | 'error' | 'success'; text: string } };
 

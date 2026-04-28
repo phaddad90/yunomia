@@ -107,6 +107,34 @@ export class PrintPepperBoardClient {
     return this.req(`/api/admin/agents/${encodeURIComponent(code)}/soul`);
   }
 
+  // ─── Bug Lessons KB (PH-088 endpoints; PH-095 consumer) ───
+
+  async lessonsList(params: { q?: string; tag?: string; severity?: string; limit?: number } = {}): Promise<unknown> {
+    const qs = new URLSearchParams();
+    if (params.q) qs.set('q', params.q);
+    if (params.tag) qs.set('tag', params.tag);
+    if (params.severity) qs.set('severity', params.severity);
+    if (params.limit) qs.set('limit', String(params.limit));
+    const query = qs.toString();
+    return this.req(`/api/admin/lessons${query ? '?' + query : ''}`);
+  }
+
+  async lessonGet(id: string): Promise<unknown> {
+    return this.req(`/api/admin/lessons/${encodeURIComponent(id)}`);
+  }
+
+  async lessonCreate(body: Record<string, unknown>): Promise<unknown> {
+    return this.req(`/api/admin/lessons`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async lessonPatch(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.req(`/api/admin/lessons/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) });
+  }
+
+  async lessonDelete(id: string): Promise<unknown> {
+    return this.req(`/api/admin/lessons/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
   async getQueue(assignee: AgentCode): Promise<Ticket[]> {
     const r = await this.req<{ queue: Ticket[] }>(`/api/admin/tickets/queue?assignee=${assignee}`);
     return r.queue || [];

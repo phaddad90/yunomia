@@ -16,8 +16,8 @@ import { InboxStore, shouldNotifyCeo, summaryFor } from './inbox.js';
 import type { InboxEntry, NormalizedEvent } from './inbox.js';
 import { Notifier } from './notifier.js';
 import { EventEmitter } from './events.js';
-import { summariseCost } from './cost.js';
 import { buildKickoffPrompt, ALLOWED_AGENT_CODES_FOR_KICKOFF, kickoffFilePath } from './kickoff.js';
+import { buildDefaultGoals, ALLOWED_AGENT_CODES_FOR_GOALS, goalsFilePath } from './goals.js';
 import { buildPrecompactPrompt, ALLOWED_AGENT_CODES_FOR_PRECOMPACT } from './precompact.js';
 import { AgentsKbClient } from './agents-kb-client.js';
 import { PresenceHeartbeat } from './presence-heartbeat.js';
@@ -331,6 +331,40 @@ async function main() {
     res.json({ agentCode: code, written: prompt.length, path });
   });
 
+  // PH-092: goals are file-backed Markdown at SaaS Architect/<AGENT>-goals.md.
+  // Same shape as kickoff (PH-090). Default seed if missing on read.
+  app.get('/api/agents/:code/goals', (req, res) => {
+    const code = req.params.code.toUpperCase() as AgentCode;
+    if (!ALLOWED_AGENT_CODES_FOR_GOALS.includes(code)) {
+      return res.status(400).json({ error: 'unknown agent code' });
+    }
+    const path = goalsFilePath(code);
+    if (existsSync(path)) {
+      const goals = readFileSync(path, 'utf-8');
+      return res.json({ agentCode: code, goals, source: 'file', path });
+    }
+    res.json({ agentCode: code, goals: buildDefaultGoals(code), source: 'fallback', path });
+  });
+
+  app.post('/api/agents/:code/goals', (req, res) => {
+    const code = req.params.code.toUpperCase() as AgentCode;
+    if (!ALLOWED_AGENT_CODES_FOR_GOALS.includes(code)) {
+      return res.status(400).json({ error: 'unknown agent code' });
+    }
+    const goals = req.body?.goals;
+    if (typeof goals !== 'string' || goals.length === 0) {
+      return res.status(400).json({ error: 'goals (string) required' });
+    }
+    if (goals.length > 32_000) {
+      return res.status(400).json({ error: 'goals max 32000 chars' });
+    }
+    const path = goalsFilePath(code);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, goals, 'utf-8');
+    logger.info({ code, bytes: goals.length, path }, 'goals written');
+    res.json({ agentCode: code, written: goals.length, path });
+  });
+
   app.get('/api/agents/:code/precompact', (req, res) => {
     const code = req.params.code.toUpperCase() as AgentCode;
     if (!ALLOWED_AGENT_CODES_FOR_PRECOMPACT.includes(code)) {
@@ -370,6 +404,43 @@ async function main() {
       }
     }
     res.status(404).json({ error: 'no soul available — neither platform DB (PH-090 deploy pending) nor local file' });
+  });
+
+  // ─── Bug Lessons (PH-095 — proxies SA's PH-088 endpoints; degrades gracefully if not yet deployed) ───
+
+  app.get('/api/board/lessons', async (req, res) => {
+    try {
+      const r = await board.lessonsList({
+        q: req.query.q as string | undefined,
+        tag: req.query.tag as string | undefined,
+        severity: req.query.severity as string | undefined,
+        limit: req.query.limit ? Number(req.query.limit) : 100,
+      });
+      res.json(r);
+    } catch (err) {
+      const status = err instanceof BoardError ? err.status : 500;
+      res.json({ lessons: [], unavailable: true, reason: `upstream ${status}` });
+    }
+  });
+
+  app.get('/api/board/lessons/:id', async (req, res) => {
+    try { res.json(await board.lessonGet(req.params.id)); }
+    catch (err) { handleErr(res, err); }
+  });
+
+  app.post('/api/board/lessons', async (req, res) => {
+    try { res.json(await board.lessonCreate(req.body || {})); }
+    catch (err) { handleErr(res, err); }
+  });
+
+  app.patch('/api/board/lessons/:id', async (req, res) => {
+    try { res.json(await board.lessonPatch(req.params.id, req.body || {})); }
+    catch (err) { handleErr(res, err); }
+  });
+
+  app.delete('/api/board/lessons/:id', async (req, res) => {
+    try { res.json(await board.lessonDelete(req.params.id)); }
+    catch (err) { handleErr(res, err); }
   });
 
   // ─── Webhook receiver (HMAC-validated) ───
@@ -430,11 +501,6 @@ async function main() {
       const code = req.params.code.toUpperCase() as AgentCode;
       res.json(await board.resumeAgent(code));
     } catch (err) { handleErr(res, err); }
-  });
-
-  // ─── Cost telemetry (PH-069 v0.3.0) ───
-  app.get('/api/cost/summary', (_req, res) => {
-    res.json(summariseCost());
   });
 
   app.post('/api/inbox/processed', (req, res) => {

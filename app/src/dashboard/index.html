@@ -17,12 +17,6 @@
       <span class="brand-name">Mission Control</span>
       <span class="brand-sub">PrintPepper</span>
     </div>
-    <button id="cost-pill" class="cost-pill" type="button" hidden>
-      <span>🔥</span>
-      <span>Today: <b id="cost-today">$—</b></span>
-      <span class="cost-sep">·</span>
-      <span>30d: <b id="cost-30d">$—</b></span>
-    </button>
     <button id="inbox-pill" class="inbox-pill" type="button" hidden>
       <span class="bell">🔔</span>
       <span class="inbox-text">CEO Inbox: <b id="inbox-pill-count">0</b></span>
@@ -67,6 +61,7 @@
         <button class="tab active" data-tab="board">Board</button>
         <button class="tab" data-tab="activity">Activity</button>
         <button class="tab" data-tab="inbox">My inbox</button>
+        <button class="tab" data-tab="lessons">Lessons</button>
         <button class="tab" data-tab="reports">Reports</button>
       </nav>
 
@@ -102,6 +97,22 @@
       </div>
       <div class="tab-panel hidden" id="panel-inbox">
         <ul id="my-inbox" class="ticket-list"></ul>
+      </div>
+      <div class="tab-panel hidden" id="panel-lessons">
+        <div class="lessons-toolbar">
+          <input id="lessons-q" class="search" placeholder="Search symptom…" />
+          <select id="lessons-severity" class="chip">
+            <option value="">All severity</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="critical">critical</option>
+          </select>
+          <input id="lessons-tag" class="search" placeholder="tag…" style="max-width:140px" />
+          <button id="lessons-new" class="btn-primary" type="button" style="margin-left:auto">+ New Lesson</button>
+        </div>
+        <ul id="lessons-list" class="lessons-list"></ul>
+        <div id="lessons-empty" class="lessons-empty hidden"></div>
       </div>
       <div class="tab-panel hidden" id="panel-reports">
         <div id="reports" class="reports">
@@ -173,21 +184,44 @@
     </footer>
   </aside>
 
-  <!-- Cost telemetry modal -->
-  <div id="cost-modal" class="modal hidden" aria-hidden="true">
+  <!-- New Lesson modal -->
+  <div id="lesson-modal" class="modal hidden" aria-hidden="true">
     <div class="modal-backdrop" data-close="1"></div>
-    <div class="modal-card">
+    <div class="modal-card lesson-modal-card">
       <header>
-        <h3>Token cost (estimate)</h3>
-        <span id="cost-modal-foot" class="pill"></span>
+        <h3 id="lesson-modal-title">New Bug Lesson</h3>
         <button class="btn-ghost" data-close="1" type="button">✕</button>
       </header>
-      <div class="cost-body">
-        <ul id="cost-totals" class="cost-totals"></ul>
-        <h4 class="cost-section">Per-agent</h4>
-        <ul id="cost-rows" class="cost-rows"></ul>
-        <p class="cost-foot">Estimate. Per-fire token mix from <code>heartbeat-simulate.ts</code> defaults — refines once empirical PH-045 capture lands.</p>
-      </div>
+      <form id="lesson-form" class="lesson-form">
+        <label>Symptom <span class="lesson-hint">one sentence</span></label>
+        <input id="lesson-symptom" type="text" maxlength="280" required />
+        <label>Severity</label>
+        <select id="lesson-sev">
+          <option value="medium" selected>medium</option>
+          <option value="low">low</option>
+          <option value="high">high</option>
+          <option value="critical">critical</option>
+        </select>
+        <label>Tags <span class="lesson-hint">comma-separated</span></label>
+        <input id="lesson-tags" type="text" placeholder="e.g. migration, postgres, auth" />
+        <label>Linked ticket (PH-NNN, optional)</label>
+        <input id="lesson-ticket" type="text" placeholder="PH-088" />
+        <label>Root cause</label>
+        <textarea id="lesson-root" rows="3"></textarea>
+        <label>Fix</label>
+        <textarea id="lesson-fix" rows="3"></textarea>
+        <label>Files changed <span class="lesson-hint">comma-separated paths</span></label>
+        <textarea id="lesson-files" rows="2"></textarea>
+        <label>How to recognise the pattern next time</label>
+        <textarea id="lesson-recognise" rows="2"></textarea>
+        <label>Prevent action</label>
+        <textarea id="lesson-prevent" rows="2"></textarea>
+        <div class="lesson-actions">
+          <span id="lesson-status" class="goals-status"></span>
+          <button type="button" class="btn-ghost" data-close="1">Cancel</button>
+          <button type="submit" class="btn-primary">Capture</button>
+        </div>
+      </form>
     </div>
   </div>
 
