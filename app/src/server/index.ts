@@ -17,6 +17,7 @@ import type { InboxEntry, NormalizedEvent } from './inbox.js';
 import { Notifier } from './notifier.js';
 import { EventEmitter } from './events.js';
 import { summariseCost } from './cost.js';
+import { buildKickoffPrompt, ALLOWED_AGENT_CODES_FOR_KICKOFF } from './kickoff.js';
 import type { AgentCode, AuditRow, MissionConfig, Ticket, WsMessage } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -279,6 +280,17 @@ async function main() {
       const prompt = renderRelayPrompt(ticket.ticket_human_id, ticket.assignee_agent, ticket.title);
       res.json({ prompt });
     } catch (err) { handleErr(res, err); }
+  });
+
+  // ─── Kickoff prompts (PH-073) ───
+
+  app.get('/api/agents/:code/kickoff', (req, res) => {
+    const code = req.params.code.toUpperCase() as AgentCode;
+    if (!ALLOWED_AGENT_CODES_FOR_KICKOFF.includes(code)) {
+      return res.status(400).json({ error: 'unknown agent code' });
+    }
+    const prompt = buildKickoffPrompt(code);
+    res.json({ agentCode: code, prompt });
   });
 
   // ─── Soul preview ───

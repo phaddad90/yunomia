@@ -172,10 +172,30 @@ function renderAgents() {
       <span class="agent-emoji">${a.emoji}</span>
       <span class="agent-code">${a.code}</span>
       <span class="agent-meta">${a.current ? `${a.current.ticket_human_id} · ${a.current.status.replace('_',' ')}` : 'idle'}</span>
+      <button class="copy-kickoff" data-agent="${a.code}" title="Copy kickoff prompt for ${a.code}" type="button">📋</button>
       <span class="light" data-state="${a.light}" title="${a.light}"></span>
     `;
-    li.addEventListener('click', () => openSoul(a.code));
+    li.addEventListener('click', (e) => {
+      // Don't open soul when clicking the copy button
+      if (e.target.closest('.copy-kickoff')) return;
+      openSoul(a.code);
+    });
+    li.querySelector('.copy-kickoff').addEventListener('click', (e) => {
+      e.stopPropagation();
+      copyKickoffPrompt(a.code);
+    });
     ul.appendChild(li);
+  }
+}
+
+async function copyKickoffPrompt(code) {
+  try {
+    const r = await fetch(`/api/agents/${encodeURIComponent(code)}/kickoff`).then((r) => r.json());
+    if (!r.prompt) throw new Error('empty kickoff');
+    await navigator.clipboard.writeText(r.prompt);
+    toast(`Kickoff for ${code} copied — paste into a fresh Claude Code session`, 'success');
+  } catch (err) {
+    toast('Kickoff copy failed: ' + (err.message || err), 'error');
   }
 }
 
@@ -431,18 +451,28 @@ async function openSoul(code) {
   $('#side-id').textContent = code;
   $('#side-status').textContent = 'soul';
   $('#side-status').className = 'status-pill';
-  $('#side-body').textContent = 'Loading…';
+  const ctaBar = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px">
+      <button class="btn-secondary" id="soul-copy-kickoff" type="button">📋 Copy kickoff prompt</button>
+      <span style="font-size:11px;color:var(--text-mid)">Paste into a fresh Claude Code session</span>
+    </div>
+  `;
+  $('#side-body').innerHTML = ctaBar + 'Loading soul…';
+  $('#soul-copy-kickoff').addEventListener('click', () => copyKickoffPrompt(code));
   try {
     const r = await fetch(`/api/agents/${code}/soul`);
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
-      $('#side-body').innerHTML = `<div style="color:var(--text-mid)">${escapeHtml(err.error || 'Soul file not available yet.')}</div>`;
+      $('#side-body').innerHTML = ctaBar + `<div style="color:var(--text-mid)">${escapeHtml(err.error || 'Soul file not available yet.')}</div>`;
+      $('#soul-copy-kickoff').addEventListener('click', () => copyKickoffPrompt(code));
       return;
     }
     const md = await r.text();
-    $('#side-body').innerHTML = `<pre style="white-space:pre-wrap">${escapeHtml(md)}</pre>`;
+    $('#side-body').innerHTML = ctaBar + `<pre style="white-space:pre-wrap">${escapeHtml(md)}</pre>`;
+    $('#soul-copy-kickoff').addEventListener('click', () => copyKickoffPrompt(code));
   } catch (err) {
-    $('#side-body').textContent = 'Failed: ' + (err.message || err);
+    $('#side-body').innerHTML = ctaBar + 'Failed: ' + escapeHtml(err.message || String(err));
+    $('#soul-copy-kickoff').addEventListener('click', () => copyKickoffPrompt(code));
   }
 }
 
