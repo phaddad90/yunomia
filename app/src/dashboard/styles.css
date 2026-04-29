@@ -602,14 +602,34 @@ ul { list-style: none; padding: 0; margin: 0; }
 .status-pill.done        { background: #ecfdf5; color: var(--check); }
 .status-pill.released    { background: #f0fdf4; color: var(--check); }
 
-.agent-section { margin-bottom: 18px; }
-.agent-section-h {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--text-mid); margin: 0 0 8px;
+/* Agent side panel — Soul | Kickoff | Goals tabs (PH-097) */
+.agent-tabs {
+  display: flex; gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
 }
-#goals-editor {
+.agent-tab {
+  background: transparent; border: none;
+  padding: 8px 14px;
+  color: var(--text-mid);
+  font-weight: 500; font-size: 12.5px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.agent-tab.active { color: var(--pepper); border-bottom-color: var(--pepper); }
+.agent-tab:hover:not(.active) { color: var(--text); }
+.agent-tab-panel { display: flex; flex-direction: column; gap: 10px; }
+.agent-tab-actions {
+  display: flex; gap: 8px; align-items: center;
+  margin-bottom: 4px;
+}
+.agent-tab-hint { font-size: 11px; color: var(--text-mid); }
+
+/* Shared editor styling for kickoff + goals textareas */
+#goals-editor, #kickoff-editor {
   width: 100%;
-  min-height: 140px;
+  min-height: 200px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
   border: 1px solid var(--border);
@@ -620,10 +640,10 @@ ul { list-style: none; padding: 0; margin: 0; }
   background: var(--surface);
   color: var(--text);
 }
-#goals-editor:focus { border-color: var(--pepper); }
+#goals-editor:focus, #kickoff-editor:focus { border-color: var(--pepper); }
 .goals-controls {
   display: flex; align-items: center; gap: 10px;
-  margin-top: 8px;
+  margin-top: 4px;
 }
 .goals-status { font-size: 11px; color: var(--text-mid); flex: 1; }
 .goals-controls .btn-primary { margin: 0; }

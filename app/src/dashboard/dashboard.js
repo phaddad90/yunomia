@@ -593,90 +593,158 @@ async function transitionSelected(action) {
   }
 }
 
+// Open the agent side panel with Soul | Kickoff | Goals tabs.
+// Soul is read-only; Kickoff + Goals each have a textarea + Save (file-backed
+// per PH-090 / PH-092). Each tab lazy-hydrates on first activation.
 async function openSoul(code) {
   const panel = $('#side-panel');
   panel.classList.remove('hidden');
   $('#side-id').textContent = code;
   $('#side-status').textContent = 'agent';
   $('#side-status').className = 'status-pill';
-  // Action bar + Goals editor section + Soul preview. Goals editor mirrors
-  // the file-backed pattern shipped in PH-090 for kickoffs (textarea + Save).
+  state.selectedAgentCode = code;
+  state.agentPanelHydrated = { soul: false, kickoff: false, goals: false };
   $('#side-body').innerHTML = `
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px">
-      <button class="btn-secondary" id="soul-copy-kickoff" type="button">📋 Copy kickoff prompt</button>
-      <span style="font-size:11px;color:var(--text-mid)">Paste into a fresh Claude Code session</span>
-    </div>
-    <section class="agent-section">
-      <h3 class="agent-section-h">Goals</h3>
-      <textarea id="goals-editor" rows="8" placeholder="Loading…"></textarea>
+    <nav class="agent-tabs">
+      <button class="agent-tab active" data-agent-tab="soul" type="button">Soul</button>
+      <button class="agent-tab" data-agent-tab="kickoff" type="button">Kickoff</button>
+      <button class="agent-tab" data-agent-tab="goals" type="button">Goals</button>
+    </nav>
+    <section class="agent-tab-panel" id="agent-tab-soul">
+      <div id="soul-preview"><span style="color:var(--text-mid)">Loading…</span></div>
+    </section>
+    <section class="agent-tab-panel hidden" id="agent-tab-kickoff">
+      <div class="agent-tab-actions">
+        <button class="btn-secondary" id="soul-copy-kickoff" type="button">📋 Copy to clipboard</button>
+        <span class="agent-tab-hint">Paste into a fresh Claude Code session</span>
+      </div>
+      <textarea id="kickoff-editor" rows="14" placeholder="Loading…"></textarea>
+      <div class="goals-controls">
+        <span id="kickoff-status" class="goals-status"></span>
+        <button id="kickoff-save" class="btn-primary" type="button" disabled>Save</button>
+      </div>
+    </section>
+    <section class="agent-tab-panel hidden" id="agent-tab-goals">
+      <textarea id="goals-editor" rows="14" placeholder="Loading…"></textarea>
       <div class="goals-controls">
         <span id="goals-status" class="goals-status"></span>
         <button id="goals-save" class="btn-primary" type="button" disabled>Save</button>
       </div>
     </section>
-    <section class="agent-section">
-      <h3 class="agent-section-h">Soul</h3>
-      <div id="soul-preview"><span style="color:var(--text-mid)">Loading…</span></div>
-    </section>
   `;
-  $('#soul-copy-kickoff').addEventListener('click', () => copyKickoffPrompt(code));
-  // Wire goals editor — fetch + populate + Save handler.
-  void hydrateGoalsEditor(code);
-  // Wire soul preview.
+  // Tab switcher
+  $$('.agent-tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const which = btn.dataset.agentTab;
+      $$('.agent-tab').forEach((b) => b.classList.toggle('active', b === btn));
+      $$('.agent-tab-panel').forEach((p) => p.classList.toggle('hidden', p.id !== `agent-tab-${which}`));
+      void hydrateAgentTab(which, code);
+    });
+  });
+  // Soul is the default tab — hydrate now.
+  await hydrateAgentTab('soul', code);
+}
+
+async function hydrateAgentTab(which, code) {
+  if (state.agentPanelHydrated && state.agentPanelHydrated[which]) return;
+  state.agentPanelHydrated[which] = true;
+  if (which === 'soul')    return hydrateSoul(code);
+  if (which === 'kickoff') return hydrateKickoffEditor(code);
+  if (which === 'goals')   return hydrateGoalsEditor(code);
+}
+
+async function hydrateSoul(code) {
+  const target = $('#soul-preview');
+  if (!target) return;
   try {
     const r = await fetch(`/api/agents/${code}/soul`);
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
-      $('#soul-preview').innerHTML = `<div style="color:var(--text-mid)">${escapeHtml(err.error || 'Soul file not available.')}</div>`;
+      target.innerHTML = `<div style="color:var(--text-mid)">${escapeHtml(err.error || 'Soul file not available.')}</div>`;
       return;
     }
     const md = await r.text();
-    $('#soul-preview').innerHTML = `<pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:8px">${escapeHtml(md)}</pre>`;
+    target.innerHTML = `<pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:8px;font-size:12.5px">${escapeHtml(md)}</pre>`;
   } catch (err) {
-    $('#soul-preview').textContent = 'Failed: ' + (err.message || err);
+    target.textContent = 'Failed: ' + (err.message || err);
   }
 }
 
-async function hydrateGoalsEditor(code) {
-  const ta = $('#goals-editor');
-  const saveBtn = $('#goals-save');
-  const status = $('#goals-status');
-  if (!ta || !saveBtn) return;
-  let originalGoals = '';
-  try {
-    const r = await fetch(`/api/agents/${encodeURIComponent(code)}/goals`).then((r) => r.json());
-    originalGoals = r.goals || '';
-    ta.value = originalGoals;
-    status.textContent = `source: ${r.source || '?'}`;
-  } catch (err) {
-    status.textContent = 'Failed to load goals: ' + (err.message || err);
-    return;
+// Reusable file-backed editor wiring — same shape for kickoff and goals.
+function wireFileBackedEditor({ code, kind, fetchKey, payloadKey, taId, saveBtnId, statusId, emptyBoilerplate, copyBtnId }) {
+  const ta = $('#' + taId);
+  const saveBtn = $('#' + saveBtnId);
+  const status = $('#' + statusId);
+  if (!ta || !saveBtn) return Promise.resolve();
+  if (copyBtnId) {
+    const copyBtn = $('#' + copyBtnId);
+    if (copyBtn) copyBtn.addEventListener('click', () => copyKickoffPrompt(code));
   }
-  ta.addEventListener('input', () => {
-    saveBtn.disabled = (ta.value === originalGoals) || ta.value.length === 0;
-    status.textContent = saveBtn.disabled ? 'no changes' : 'edited — click Save';
-  });
-  saveBtn.addEventListener('click', async () => {
-    saveBtn.disabled = true;
-    status.textContent = 'saving…';
-    try {
-      const r = await fetch(`/api/agents/${encodeURIComponent(code)}/goals`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ goals: ta.value }),
-      });
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        throw new Error(err.error || `save ${r.status}`);
-      }
-      originalGoals = ta.value;
-      status.textContent = 'saved · file: ' + (await r.json()).path.split('/').pop();
-      toast(`Goals for ${code} saved`, 'success');
-    } catch (err) {
-      status.textContent = 'save failed';
-      toast('Goals save failed: ' + (err.message || err), 'error');
-      saveBtn.disabled = false;
+  let original = '';
+  return fetch(`/api/agents/${encodeURIComponent(code)}/${kind}`).then((r) => r.json()).then((r) => {
+    original = r[fetchKey] || '';
+    if (!original.trim() && emptyBoilerplate) {
+      ta.value = '';
+      ta.placeholder = emptyBoilerplate;
+    } else {
+      ta.value = original;
     }
+    status.textContent = `source: ${r.source || '?'}`;
+    ta.addEventListener('input', () => {
+      saveBtn.disabled = (ta.value === original) || ta.value.length === 0;
+      status.textContent = saveBtn.disabled ? 'no changes' : 'edited — click Save';
+    });
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      status.textContent = 'saving…';
+      try {
+        const r2 = await fetch(`/api/agents/${encodeURIComponent(code)}/${kind}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [payloadKey]: ta.value }),
+        });
+        if (!r2.ok) {
+          const err = await r2.json().catch(() => ({}));
+          throw new Error(err.error || `save ${r2.status}`);
+        }
+        original = ta.value;
+        status.textContent = 'saved · ' + (await r2.json()).path.split('/').pop();
+        toast(`${kind[0].toUpperCase() + kind.slice(1)} for ${code} saved`, 'success');
+      } catch (err) {
+        status.textContent = 'save failed';
+        toast(`${kind} save failed: ` + (err.message || err), 'error');
+        saveBtn.disabled = false;
+      }
+    });
+  }).catch((err) => {
+    status.textContent = 'Failed to load ' + kind + ': ' + (err.message || err);
+  });
+}
+
+async function hydrateKickoffEditor(code) {
+  await wireFileBackedEditor({
+    code,
+    kind: 'kickoff',
+    fetchKey: 'prompt',
+    payloadKey: 'prompt',
+    taId: 'kickoff-editor',
+    saveBtnId: 'kickoff-save',
+    statusId: 'kickoff-status',
+    copyBtnId: 'soul-copy-kickoff',
+    emptyBoilerplate: `No kickoff captured yet for ${code}. Edit + Save to populate.`,
+  });
+}
+
+async function hydrateGoalsEditor(code) {
+  await wireFileBackedEditor({
+    code,
+    kind: 'goals',
+    fetchKey: 'goals',
+    payloadKey: 'goals',
+    taId: 'goals-editor',
+    saveBtnId: 'goals-save',
+    statusId: 'goals-status',
+    emptyBoilerplate: `No goals captured yet for ${code}. Edit + Save to populate.`,
   });
 }
 

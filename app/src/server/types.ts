@@ -109,7 +109,7 @@ export const AGENT_EMOJI: Record<AgentCode, string> = {
 // appears on the rail so blockers/decisions surface visually, but excluded
 // from any auth-as-X path (identity switcher, kickoff prompts, heartbeat
 // ticker — see below).
-export const AGENT_LIST: AgentCode[] = ['CEO', 'SA', 'AD', 'WA', 'DA', 'QA', 'WD', 'PETER'];
+export const AGENT_LIST: AgentCode[] = ['CEO', 'SA', 'AD', 'WA', 'DA', 'QA', 'WD', 'TA', 'PETER'];
 
 // Codes a Mission Control instance can authenticate AS. Peter is human; he
 // does not call the admin API as an agent — only ever appears as assignee.
