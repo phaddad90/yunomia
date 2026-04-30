@@ -601,6 +601,17 @@ ul { list-style: none; padding: 0; margin: 0; }
 .status-pill.triage      { background: var(--pepper-soft); color: var(--pepper); }
 .status-pill.done        { background: #ecfdf5; color: var(--check); }
 .status-pill.released    { background: #f0fdf4; color: var(--check); }
+.status-mover {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-hi);
+  cursor: pointer;
+}
+.status-mover:hover { border-color: var(--pepper); }
 
 /* Agent side panel — Soul | Kickoff | Goals tabs (PH-097) */
 .agent-tabs {

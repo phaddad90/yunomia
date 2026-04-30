@@ -91,7 +91,16 @@ function bindUi() {
   $('#side-copy').addEventListener('click', copyPromptForSelected);
   $('#side-start').addEventListener('click', () => transitionSelected('start'));
   $('#side-handoff').addEventListener('click', () => transitionSelected('handoff'));
-  $('#side-done').addEventListener('click', () => transitionSelected('done'));
+  $('#side-done').addEventListener('click', () => {
+    // PH-108: confirm BEFORE posting — the lesson-capture dialog fires after the
+    // transition completes, so Cancel there can't undo an accidental Done.
+    const id = $('#side-id').textContent || 'this ticket';
+    if (!confirm(`Mark ${id} as done?`)) return;
+    transitionSelected('done');
+  });
+  // PH-108: manual status mover. Click any card → side panel opens → pick a
+  // status here to move the ticket. Reverses accidental Done clicks too.
+  $('#side-status-mover').addEventListener('change', (e) => moveSelectedToStatus(e.target.value));
 
   // Drag screenshots into the body (textarea)
   const note = $('#note-body');
@@ -511,6 +520,7 @@ async function openTicket(id) {
     $('#side-id').textContent = t.ticket_human_id;
     $('#side-status').textContent = t.status.replace('_', ' ');
     $('#side-status').className = 'status-pill ' + t.status;
+    showStatusMover(t.status);
     $('#side-body').innerHTML = renderTicketDetail(t, r.audit || [], state.selectedTicketComments);
   } catch (err) {
     $('#side-body').textContent = 'Failed to load: ' + (err.message || err);
@@ -530,6 +540,7 @@ async function refreshOpenTicket() {
     $('#side-id').textContent = t.ticket_human_id;
     $('#side-status').textContent = t.status.replace('_', ' ');
     $('#side-status').className = 'status-pill ' + t.status;
+    showStatusMover(t.status);
     $('#side-body').innerHTML = renderTicketDetail(t, r.audit || [], state.selectedTicketComments);
   } catch { /* silent */ }
 }
@@ -538,6 +549,7 @@ function closeSidePanel() {
   $('#side-panel').classList.add('hidden');
   state.selectedTicketId = null;
   state.selectedTicketComments = [];
+  hideStatusMover();
 }
 
 function renderTicketDetail(t, audit, commentsArr) {
@@ -593,6 +605,42 @@ async function transitionSelected(action) {
   }
 }
 
+async function moveSelectedToStatus(newStatus) {
+  if (!state.selectedTicketId || !newStatus) return;
+  try {
+    const r = await fetch(`/api/board/tickets/${state.selectedTicketId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    if (!r.ok) throw new Error(`patch ${r.status}`);
+    toast(`Moved to ${newStatus.replace('_', ' ')}`, 'success');
+    await openTicket(state.selectedTicketId);
+    refreshBoard();
+  } catch (err) {
+    toast('Move failed: ' + (err.message || err), 'error');
+  }
+}
+
+function showStatusMover(currentStatus) {
+  const sel = $('#side-status-mover');
+  sel.innerHTML = '';
+  for (const c of COLUMNS) {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.label;
+    if (c.id === currentStatus) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  sel.hidden = false;
+}
+
+function hideStatusMover() {
+  const sel = $('#side-status-mover');
+  sel.innerHTML = '';
+  sel.hidden = true;
+}
+
 // Open the agent side panel with Soul | Kickoff | Goals tabs.
 // Soul is read-only; Kickoff + Goals each have a textarea + Save (file-backed
 // per PH-090 / PH-092). Each tab lazy-hydrates on first activation.
@@ -602,6 +650,7 @@ async function openSoul(code) {
   $('#side-id').textContent = code;
   $('#side-status').textContent = 'agent';
   $('#side-status').className = 'status-pill';
+  hideStatusMover();
   state.selectedAgentCode = code;
   state.agentPanelHydrated = { soul: false, kickoff: false, goals: false };
   $('#side-body').innerHTML = `
@@ -930,6 +979,7 @@ async function openLessonDetail(l) {
   $('#side-id').textContent = l.id || l.lesson_human_id || 'BL';
   $('#side-status').textContent = l.severity || 'lesson';
   $('#side-status').className = 'status-pill';
+  hideStatusMover();
   state.selectedTicketId = null; // not a ticket
   $('#side-body').textContent = 'Loading…';
   try {
@@ -1147,6 +1197,7 @@ function handleTicketChanged({ ticket_id, after, fields_changed }) {
     const t = state.tickets[idx];
     $('#side-status').textContent = t.status.replace('_', ' ');
     $('#side-status').className = 'status-pill ' + t.status;
+    showStatusMover(t.status);
   }
   refreshAgentsQuietly();
   noteGranularApplied();
