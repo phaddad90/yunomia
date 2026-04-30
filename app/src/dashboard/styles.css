@@ -613,6 +613,24 @@ ul { list-style: none; padding: 0; margin: 0; }
 }
 .status-mover:hover { border-color: var(--pepper); }
 
+/* PH-118 — schedule badge + side-panel picker */
+.sched-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 11px; padding: 2px 6px; border-radius: 999px;
+  background: #fff8e1; color: #92400e; font-weight: 600;
+}
+.sched-badge.overdue { background: #fee2e2; color: #b91c1c; }
+.sched-row {
+  display: flex; gap: 8px; align-items: center; margin: 4px 0 6px;
+}
+.sched-row input[type="datetime-local"] {
+  flex: 1; padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: var(--radius); font: inherit; color: var(--text-hi);
+  background: var(--surface);
+}
+.sched-meta-line { min-height: 14px; }
+.sched-meta { font-size: 11px; color: var(--text-low); font-family: 'JetBrains Mono', monospace; }
+
 /* Agent side panel — Soul | Kickoff | Goals tabs (PH-097) */
 .agent-tabs {
   display: flex; gap: 0;

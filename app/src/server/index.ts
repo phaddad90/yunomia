@@ -22,6 +22,8 @@ import { buildPrecompactPrompt, ALLOWED_AGENT_CODES_FOR_PRECOMPACT } from './pre
 import { AgentsKbClient } from './agents-kb-client.js';
 import { PresenceHeartbeat } from './presence-heartbeat.js';
 import { PresencePoller } from './presence-poller.js';
+import { ScheduleStore } from './schedule-store.js';
+import { SchedulePoller } from './schedule-poller.js';
 import type { AgentCode, AuditRow, MissionConfig, Ticket, WsMessage } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -80,6 +82,8 @@ async function main() {
   const agentsKb = new AgentsKbClient(board, logger);
   const inbox = new InboxStore(undefined, logger);
   inbox.init();
+  const schedules = new ScheduleStore(undefined, logger);
+  schedules.init();
   const notifier = new Notifier(logger);
   // EventEmitter is bound to broadcast below; initialised after wss/clients
   // are set up so the closure can capture them.
@@ -305,11 +309,31 @@ async function main() {
       return res.status(400).json({ error: 'unknown agent code' });
     }
     const path = kickoffFilePath(code);
+    let basePrompt: string;
+    let source: 'file' | 'fallback';
     if (existsSync(path)) {
-      const prompt = readFileSync(path, 'utf-8');
-      return res.json({ agentCode: code, prompt, source: 'file', path });
+      basePrompt = readFileSync(path, 'utf-8');
+      source = 'file';
+    } else {
+      basePrompt = buildKickoffPrompt(code);
+      source = 'fallback';
     }
-    res.json({ agentCode: code, prompt: buildKickoffPrompt(code), source: 'fallback', path });
+    // PH-118: append a "Scheduled tickets due now" block so post-compact
+    // reorientation surfaces parked work whose moment has arrived. Block is
+    // omitted when nothing is due, so existing flows are unchanged.
+    const due = schedules.allDue();
+    if (due.length) {
+      const lines = due
+        .slice()
+        .sort((a, b) => (a.scheduled_for || '').localeCompare(b.scheduled_for || ''))
+        .map((e) => {
+          const id = e.ticket_human_id || e.ticket_id;
+          const title = e.ticket_title ? ` — ${e.ticket_title}` : '';
+          return `- 🔔 **${id}**${title} (scheduled for ${e.scheduled_for}, set by ${e.set_by})`;
+        });
+      basePrompt += `\n\n---\n\n## 🔔 Scheduled tickets now due (${due.length})\n${lines.join('\n')}\n`;
+    }
+    res.json({ agentCode: code, prompt: basePrompt, source, path });
   });
 
   app.post('/api/agents/:code/kickoff', (req, res) => {
@@ -503,6 +527,40 @@ async function main() {
     } catch (err) { handleErr(res, err); }
   });
 
+  // ─── Scheduled-for (PH-118) — MC-local file-backed store ───
+
+  app.get('/api/board/schedules', (_req, res) => {
+    res.json({ schedules: schedules.list() });
+  });
+
+  app.put('/api/board/tickets/:id/schedule', (req, res) => {
+    const ticketId = req.params.id;
+    const scheduledFor = req.body?.scheduled_for ?? req.body?.scheduledFor;
+    if (!scheduledFor || typeof scheduledFor !== 'string') {
+      return res.status(400).json({ error: 'scheduled_for required (ISO 8601)' });
+    }
+    const when = new Date(scheduledFor);
+    if (Number.isNaN(when.getTime())) return res.status(400).json({ error: 'scheduled_for must parse as a date' });
+    const ticketHumanId = (req.body?.ticket_human_id ?? req.body?.ticketHumanId ?? null) as string | null;
+    const ticketTitle = (req.body?.ticket_title ?? req.body?.ticketTitle ?? null) as string | null;
+    schedules.set({
+      ticket_id: ticketId,
+      ticket_human_id: ticketHumanId,
+      ticket_title: ticketTitle,
+      scheduled_for: when.toISOString(),
+      set_by: identity.current,
+      set_at: new Date().toISOString(),
+    });
+    broadcast({ type: 'tickets_changed', data: { reason: 'schedule_set' } });
+    res.json({ success: true, schedule: schedules.get(ticketId) });
+  });
+
+  app.delete('/api/board/tickets/:id/schedule', (req, res) => {
+    const removed = schedules.clear(req.params.id);
+    if (removed) broadcast({ type: 'tickets_changed', data: { reason: 'schedule_cleared' } });
+    res.json({ success: true, removed });
+  });
+
   app.post('/api/inbox/processed', (req, res) => {
     const ids = Array.isArray(req.body?.delivery_ids) ? req.body.delivery_ids.map(String) : [];
     if (!ids.length) return res.status(400).json({ error: 'delivery_ids required' });
@@ -573,10 +631,18 @@ async function main() {
   );
   poller.start();
 
+  const schedulePoller = new SchedulePoller(
+    schedules,
+    notifier,
+    logger,
+    () => broadcast({ type: 'tickets_changed', data: { reason: 'schedule_due' } }),
+  );
+  schedulePoller.start();
+
   // ─── Start ───
 
-  process.on('SIGINT', () => { poller.stop(); presencePoller.stop(); presenceHeartbeat.stop(); server.close(); process.exit(0); });
-  process.on('SIGTERM', () => { poller.stop(); presencePoller.stop(); presenceHeartbeat.stop(); server.close(); process.exit(0); });
+  process.on('SIGINT', () => { poller.stop(); presencePoller.stop(); presenceHeartbeat.stop(); schedulePoller.stop(); server.close(); process.exit(0); });
+  process.on('SIGTERM', () => { poller.stop(); presencePoller.stop(); presenceHeartbeat.stop(); schedulePoller.stop(); server.close(); process.exit(0); });
 
   server.listen(config.port, '127.0.0.1', () => {
     logger.info({ port: config.port }, `Mission Control running at http://localhost:${config.port}`);

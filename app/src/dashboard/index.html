@@ -84,6 +84,16 @@
               <option>CEO</option><option>TA</option><option>PETER</option>
             </select>
           </label>
+          <label class="chip">
+            <span>Due</span>
+            <select id="filter-due">
+              <option value="">All</option>
+              <option value="overdue">Overdue</option>
+              <option value="today">Due today</option>
+              <option value="week">Due this week</option>
+              <option value="scheduled">Any scheduled</option>
+            </select>
+          </label>
           <input id="filter-q" class="search" placeholder="Search title/body…" />
         </div>
         <button id="refresh" class="btn-ghost">Refresh</button>

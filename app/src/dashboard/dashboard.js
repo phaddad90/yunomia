@@ -16,7 +16,7 @@ const state = {
   me: 'TA',
   tickets: [],
   agents: [],
-  filters: { audience: '', assignee: '', q: '' },
+  filters: { audience: '', assignee: '', q: '', due: '' },
   activity: [],
   ws: null,
   refreshTimer: null,
@@ -24,6 +24,7 @@ const state = {
   selectedTicketComments: [],
   seenEventIds: new Set(),    // dedupe granular WS events between local-write and audit-poll paths
   presence: {},                // agent_code → AgentPresence
+  schedules: {},               // PH-118: ticket_id → { scheduled_for, set_by, set_at, ticket_human_id, ticket_title }
 };
 
 const $  = (s, root = document) => root.querySelector(s);
@@ -71,6 +72,7 @@ function bindUi() {
   $('#filter-audience').addEventListener('change', (e) => { state.filters.audience = e.target.value; renderBoard(); });
   $('#filter-assignee').addEventListener('change', (e) => { state.filters.assignee = e.target.value; renderBoard(); });
   $('#filter-q').addEventListener('input', debounce((e) => { state.filters.q = e.target.value.toLowerCase(); renderBoard(); }, 200));
+  $('#filter-due').addEventListener('change', (e) => { state.filters.due = e.target.value; renderBoard(); });
 
   // Note form
   $('#note-form').addEventListener('submit', (e) => { e.preventDefault(); submitNote(); });
@@ -154,11 +156,19 @@ async function refreshBoard() {
     const params = new URLSearchParams();
     if (state.filters.audience) params.set('audience', state.filters.audience);
     if (state.filters.assignee) params.set('assignee', state.filters.assignee);
-    const r = await fetch('/api/board/tickets?' + params.toString());
+    const [r, sched] = await Promise.all([
+      fetch('/api/board/tickets?' + params.toString()),
+      fetch('/api/board/schedules').catch(() => null),
+    ]);
     if (!r.ok) throw new Error(`board fetch ${r.status}`);
     const data = await r.json();
     state.tickets = data.tickets || [];
     state.agents = data.agents || [];
+    if (sched && sched.ok) {
+      const sd = await sched.json();
+      state.schedules = {};
+      for (const e of sd.schedules || []) state.schedules[e.ticket_id] = e;
+    }
     renderAll();
   } catch (err) {
     toast(String(err.message || err), 'error');
@@ -374,9 +384,11 @@ function renderBoard() {
     colEl.innerHTML = `<div class="col-head">${arrow}<span>${col.label}</span><span class="count">${cards.length}</span></div>`;
     if (!collapsed) {
       // Newest-first within done/released so the latest closes float to the top.
+      // Otherwise: PH-118 — scheduled tickets bubble up; overdue first, then
+      // due-soon, then unscheduled (preserve original order within each band).
       const ordered = collapsible
         ? cards.slice().sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
-        : cards;
+        : cards.slice().sort(scheduleCompare);
       const limit = (collapsible && !showAll) ? SHOW_LIMIT_WHEN_EXPANDED : ordered.length;
       const visible = ordered.slice(0, limit);
       for (const t of visible) colEl.appendChild(renderTicketCard(t));
@@ -413,13 +425,55 @@ function matchFilters(t) {
     const hay = (t.title + ' ' + (t.body_md || '') + ' ' + t.ticket_human_id).toLowerCase();
     if (!hay.includes(f.q)) return false;
   }
+  if (f.due) {
+    const sched = state.schedules?.[t.id];
+    if (!sched) return false;
+    const when = new Date(sched.scheduled_for).getTime();
+    const now = Date.now();
+    if (f.due === 'overdue' && when > now) return false;
+    if (f.due === 'today') {
+      const end = endOfToday();
+      if (when > end) return false;
+    }
+    if (f.due === 'week') {
+      const end = endOfThisWeek();
+      if (when > end) return false;
+    }
+    // 'scheduled' = any scheduled — already passed the !sched gate
+  }
   return true;
+}
+
+// PH-118: order within a column — overdue ↑, then due-in-future asc, then unscheduled.
+function scheduleCompare(a, b) {
+  const sa = state.schedules?.[a.id];
+  const sb = state.schedules?.[b.id];
+  if (!sa && !sb) return 0;
+  if (sa && !sb) return -1;
+  if (!sa && sb) return 1;
+  return (sa.scheduled_for || '').localeCompare(sb.scheduled_for || '');
+}
+
+function endOfToday() {
+  const d = new Date();
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
+}
+function endOfThisWeek() {
+  const d = new Date();
+  const day = d.getDay();   // 0=Sun..6=Sat
+  const daysToSun = (7 - day) % 7;
+  d.setDate(d.getDate() + daysToSun);
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
 }
 
 function renderTicketCard(t) {
   const div = document.createElement('div');
   div.className = 'ticket';
   div.dataset.id = t.id;
+  const sched = state.schedules?.[t.id];
+  const schedBadge = sched ? renderScheduleBadge(sched) : '';
   div.innerHTML = `
     <div class="ticket-head">
       <span class="ticket-id">${t.ticket_human_id}</span>
@@ -429,10 +483,35 @@ function renderTicketCard(t) {
     <div class="ticket-foot">
       <span class="ticket-pill ${t.audience}">${t.audience}</span>
       <span class="ticket-pill ${t.type}">${t.type}</span>
+      ${schedBadge}
     </div>
   `;
   div.addEventListener('click', () => openTicket(t.id));
   return div;
+}
+
+// PH-118: schedule badge — 🔔 + relative time. Red when overdue.
+function renderScheduleBadge(s) {
+  const when = new Date(s.scheduled_for);
+  const overdue = when.getTime() <= Date.now();
+  const cls = overdue ? 'sched-badge overdue' : 'sched-badge';
+  return `<span class="${cls}" title="Scheduled for ${escapeHtml(s.scheduled_for)}">🔔 ${escapeHtml(formatScheduledRel(when))}</span>`;
+}
+
+function formatScheduledRel(when) {
+  const ms = when.getTime() - Date.now();
+  const abs = Math.abs(ms);
+  const m = Math.round(abs / 60000);
+  const h = Math.round(abs / 3600000);
+  const d = Math.round(abs / 86400000);
+  if (ms <= 0) {
+    if (m < 60) return `${m}m overdue`;
+    if (h < 48) return `${h}h overdue`;
+    return `${d}d overdue`;
+  }
+  if (m < 60) return `in ${m}m`;
+  if (h < 48) return `in ${h}h`;
+  return `in ${d}d`;
 }
 
 // ─── Inbox / Activity / Reports ───
@@ -522,6 +601,7 @@ async function openTicket(id) {
     $('#side-status').className = 'status-pill ' + t.status;
     showStatusMover(t.status);
     $('#side-body').innerHTML = renderTicketDetail(t, r.audit || [], state.selectedTicketComments);
+    wireSchedulePicker(t);
   } catch (err) {
     $('#side-body').textContent = 'Failed to load: ' + (err.message || err);
   }
@@ -542,6 +622,7 @@ async function refreshOpenTicket() {
     $('#side-status').className = 'status-pill ' + t.status;
     showStatusMover(t.status);
     $('#side-body').innerHTML = renderTicketDetail(t, r.audit || [], state.selectedTicketComments);
+    wireSchedulePicker(t);
   } catch { /* silent */ }
 }
 
@@ -555,6 +636,20 @@ function closeSidePanel() {
 function renderTicketDetail(t, audit, commentsArr) {
   const refs = (() => { try { return JSON.parse(t.references_json || '[]'); } catch { return []; } })();
   const refList = refs.length ? `<h4>References</h4><ul>${refs.map((r) => `<li>${escapeHtml(typeof r === 'string' ? r : JSON.stringify(r))}</li>`).join('')}</ul>` : '';
+  // PH-118: schedule picker. datetime-local input pre-filled with current value,
+  // Save / Clear buttons. State of the input is hydrated from state.schedules.
+  const sched = state.schedules?.[t.id];
+  const schedValue = sched ? toDatetimeLocalValue(sched.scheduled_for) : '';
+  const schedMeta = sched ? `<span class="sched-meta">set by ${escapeHtml(sched.set_by || '?')} · ${escapeHtml(sched.scheduled_for || '')}</span>` : '';
+  const schedBlock = `
+    <h4>Scheduled for</h4>
+    <div class="sched-row">
+      <input type="datetime-local" id="sched-input" value="${escapeHtml(schedValue)}" />
+      <button class="btn-secondary" id="sched-save" type="button">Save</button>
+      <button class="btn-ghost" id="sched-clear" type="button" ${sched ? '' : 'disabled'}>Clear</button>
+    </div>
+    <div class="sched-meta-line">${schedMeta}</div>
+  `;
   // PH-051: comments come from {ticket, audit, comments} now. Oldest-first
   // matches the API order so verdicts read top-to-bottom in chronological
   // order (the comm layer relies on this — readers should see SA → AD → QA
@@ -573,6 +668,7 @@ function renderTicketDetail(t, audit, commentsArr) {
       ${t.audience} · ${t.type}
     </div>
     <pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:8px">${escapeHtml(t.body_md || '')}</pre>
+    ${schedBlock}
     ${refList}
     <div class="comments">
       <h4>Comments (${list.length})</h4>
@@ -620,6 +716,59 @@ async function moveSelectedToStatus(newStatus) {
   } catch (err) {
     toast('Move failed: ' + (err.message || err), 'error');
   }
+}
+
+// PH-118: pre-fill `<input type="datetime-local">` from an ISO string in local TZ.
+function toDatetimeLocalValue(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function wireSchedulePicker(t) {
+  const input = $('#sched-input');
+  const save = $('#sched-save');
+  const clear = $('#sched-clear');
+  if (!input || !save || !clear) return;
+  save.addEventListener('click', async () => {
+    const v = input.value;
+    if (!v) { toast('Pick a date and time first', 'error'); return; }
+    const when = new Date(v);   // datetime-local is parsed as local time
+    if (Number.isNaN(when.getTime())) { toast('Invalid date', 'error'); return; }
+    try {
+      const r = await fetch(`/api/board/tickets/${t.id}/schedule`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scheduled_for: when.toISOString(),
+          ticket_human_id: t.ticket_human_id,
+          ticket_title: t.title,
+        }),
+      });
+      if (!r.ok) throw new Error(`schedule ${r.status}`);
+      const data = await r.json();
+      if (data?.schedule) state.schedules[t.id] = data.schedule;
+      toast(`Scheduled ${t.ticket_human_id} for ${when.toLocaleString()}`, 'success');
+      await openTicket(t.id);
+      renderBoard();
+    } catch (err) {
+      toast('Schedule save failed: ' + (err.message || err), 'error');
+    }
+  });
+  clear.addEventListener('click', async () => {
+    try {
+      const r = await fetch(`/api/board/tickets/${t.id}/schedule`, { method: 'DELETE' });
+      if (!r.ok) throw new Error(`clear ${r.status}`);
+      delete state.schedules[t.id];
+      toast(`Cleared schedule on ${t.ticket_human_id}`, 'success');
+      await openTicket(t.id);
+      renderBoard();
+    } catch (err) {
+      toast('Clear failed: ' + (err.message || err), 'error');
+    }
+  });
 }
 
 function showStatusMover(currentStatus) {
