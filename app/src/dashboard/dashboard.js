@@ -25,6 +25,8 @@ const state = {
   seenEventIds: new Set(),    // dedupe granular WS events between local-write and audit-poll paths
   presence: {},                // agent_code → AgentPresence
   schedules: {},               // PH-118: ticket_id → { scheduled_for, set_by, set_at, ticket_human_id, ticket_title }
+  eligibility: null,           // PH-127: latest eligible-actions response for selectedTicketId
+  killSwitch: { disabled: false },  // PH-127: { disabled, disabled_at, disabled_by, reason, updated_at }
 };
 
 const $  = (s, root = document) => root.querySelector(s);
@@ -44,6 +46,8 @@ const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
   await refreshBoard();
   await refreshInbox();
   await refreshPresence();
+  await refreshKillSwitch();
+  setInterval(refreshKillSwitch, 30_000);   // PH-127
 })();
 
 // ─── UI bindings ───
@@ -135,6 +139,7 @@ function connectWs() {
         case 'identity_changed': handleIdentityChanged(msg.data); break;
         case 'presence_changed': handlePresence(msg.data?.presence || []); break;
         case 'toast':            toast(msg.data.text, msg.data.kind); break;
+        case 'lint_completed':   handleLintCompleted(msg.data); break;            // PH-127: async lint patch
         default: break;
       }
     } catch { /* ignore */ }
@@ -602,6 +607,7 @@ async function openTicket(id) {
     showStatusMover(t.status);
     $('#side-body').innerHTML = renderTicketDetail(t, r.audit || [], state.selectedTicketComments);
     wireSchedulePicker(t);
+    void refreshEligibility(t.id);
   } catch (err) {
     $('#side-body').textContent = 'Failed to load: ' + (err.message || err);
   }
@@ -623,6 +629,7 @@ async function refreshOpenTicket() {
     showStatusMover(t.status);
     $('#side-body').innerHTML = renderTicketDetail(t, r.audit || [], state.selectedTicketComments);
     wireSchedulePicker(t);
+    void refreshEligibility(t.id);
   } catch { /* silent */ }
 }
 
@@ -658,6 +665,7 @@ function renderTicketDetail(t, audit, commentsArr) {
   const comments = list.map((c) => `
     <div class="comment">
       <div class="who">${escapeHtml(c.author_label || c.author_kind || '')} · ${formatTime(c.created_at)}</div>
+      ${renderLintBannerFor(c)}
       ${escapeHtml(c.body_md || '')}
     </div>
   `).join('');
@@ -716,6 +724,84 @@ async function moveSelectedToStatus(newStatus) {
   } catch (err) {
     toast('Move failed: ' + (err.message || err), 'error');
   }
+}
+
+// PH-127: kill-switch banner refresh — every 30s + on boot.
+async function refreshKillSwitch() {
+  try {
+    const r = await fetch('/api/board/compliance/kill-switch');
+    if (!r.ok) return;
+    state.killSwitch = await r.json();
+    renderKillSwitchBanner();
+  } catch { /* silent — endpoint may not be deployed yet */ }
+}
+
+function renderKillSwitchBanner() {
+  const el = $('#kill-switch-banner');
+  if (!el) return;
+  const ks = state.killSwitch || {};
+  if (!ks.disabled) { el.hidden = true; el.textContent = ''; return; }
+  const by = ks.disabled_by || 'admin';
+  const at = ks.disabled_at ? new Date(ks.disabled_at).toLocaleString() : 'unknown time';
+  const reason = ks.reason ? ` — reason: ${ks.reason}` : '';
+  el.textContent = `⚠ Compliance disabled by ${by} since ${at}${reason}. All rule blocks bypassed; every action is being audit-logged as bypass.`;
+  el.hidden = false;
+}
+
+// PH-127: fetch eligibility for the open ticket and apply to action buttons.
+async function refreshEligibility(ticketId) {
+  try {
+    const r = await fetch(`/api/board/tickets/${ticketId}/eligible-actions`);
+    if (!r.ok) { applyEligibility(null); return; }
+    state.eligibility = await r.json();
+    applyEligibility(state.eligibility);
+  } catch { applyEligibility(null); }
+}
+
+function applyEligibility(e) {
+  // Default: all enabled, no tooltip. If we have an eligibility object, gate per flag.
+  const setBtn = (sel, can, reason) => {
+    const btn = $(sel);
+    if (!btn) return;
+    btn.disabled = e ? !can : false;
+    btn.title = (e && !can && reason) ? reason : '';
+  };
+  setBtn('#side-start',   e ? e.can_start   : true, e?.start_reason);
+  setBtn('#side-handoff', e ? e.can_handoff : true, e?.handoff_reason);
+  setBtn('#side-done',    e ? e.can_done    : true, e?.done_reason);
+}
+
+// PH-127: WS event for async-lint completion. Patch the comment in place.
+function handleLintCompleted(data) {
+  if (!data || !data.comment_id) return;
+  if (data.ticket_id !== state.selectedTicketId) return;
+  const idx = (state.selectedTicketComments || []).findIndex((c) => c.id === data.comment_id);
+  if (idx < 0) return;
+  state.selectedTicketComments[idx] = {
+    ...state.selectedTicketComments[idx],
+    lint_warnings_json: data.warnings || [],
+  };
+  // Re-render the comments section without reloading the whole panel.
+  const t = state.tickets.find((x) => x.id === state.selectedTicketId);
+  if (t) {
+    $('#side-body').innerHTML = renderTicketDetail(t, [], state.selectedTicketComments);
+    wireSchedulePicker(t);
+  }
+}
+
+// PH-127: parse + render lint warnings stored on a comment.
+function renderLintBannerFor(comment) {
+  let arr = comment.lint_warnings_json;
+  if (typeof arr === 'string') {
+    try { arr = JSON.parse(arr); } catch { arr = []; }
+  }
+  if (!Array.isArray(arr) || arr.length === 0) return '';
+  const items = arr.map((w) => {
+    const rule = w.ruleId || w.rule_id || w.rule || 'lint';
+    const msg = w.message || String(w);
+    return `<li><b>${escapeHtml(rule)}</b> — ${escapeHtml(msg)}</li>`;
+  }).join('');
+  return `<div class="lint-banner"><div class="lint-head">⚠ Lint</div><ul>${items}</ul></div>`;
 }
 
 // PH-118: pre-fill `<input type="datetime-local">` from an ISO string in local TZ.
@@ -1347,6 +1433,7 @@ function handleTicketChanged({ ticket_id, after, fields_changed }) {
     $('#side-status').textContent = t.status.replace('_', ' ');
     $('#side-status').className = 'status-pill ' + t.status;
     showStatusMover(t.status);
+    void refreshEligibility(t.id);   // PH-127: status flipped → eligibility may have flipped too
   }
   refreshAgentsQuietly();
   noteGranularApplied();

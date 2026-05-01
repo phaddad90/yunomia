@@ -631,6 +631,24 @@ ul { list-style: none; padding: 0; margin: 0; }
 .sched-meta-line { min-height: 14px; }
 .sched-meta { font-size: 11px; color: var(--text-low); font-family: 'JetBrains Mono', monospace; }
 
+/* PH-127 — kill-switch banner (red, top-of-app) + lint warning banner (yellow, per comment) */
+.kill-switch-banner {
+  background: #b91c1c; color: #fff;
+  padding: 10px 16px; font-size: 13px; font-weight: 600;
+  border-bottom: 2px solid #7f1d1d;
+  text-align: center;
+}
+.lint-banner {
+  background: #fef3c7; color: #92400e;
+  border: 1px solid #fcd34d; border-radius: var(--radius);
+  padding: 6px 10px; margin: 4px 0 6px;
+  font-size: 12px;
+}
+.lint-banner .lint-head { font-weight: 700; margin-bottom: 2px; }
+.lint-banner ul { margin: 0; padding-left: 18px; }
+.lint-banner li { margin: 2px 0; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* Agent side panel — Soul | Kickoff | Goals tabs (PH-097) */
 .agent-tabs {
   display: flex; gap: 0;

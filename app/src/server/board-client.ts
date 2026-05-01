@@ -199,4 +199,13 @@ export class PrintPepperBoardClient {
       body: JSON.stringify(fields),
     });
   }
+
+  // PH-127: compliance engine read endpoints (PH-126).
+  async eligibleActions(ticketId: string): Promise<unknown> {
+    return this.req(`/api/admin/tickets/${encodeURIComponent(ticketId)}/eligible-actions`);
+  }
+
+  async killSwitch(): Promise<unknown> {
+    return this.req(`/api/admin/compliance/kill-switch`);
+  }
 }

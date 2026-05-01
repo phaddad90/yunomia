@@ -527,6 +527,16 @@ async function main() {
     } catch (err) { handleErr(res, err); }
   });
 
+  // ─── Compliance engine read-through (PH-127, consumes PH-126) ───
+
+  app.get('/api/board/tickets/:id/eligible-actions', async (req, res) => {
+    try { res.json(await board.eligibleActions(req.params.id)); } catch (err) { handleErr(res, err); }
+  });
+
+  app.get('/api/board/compliance/kill-switch', async (_req, res) => {
+    try { res.json(await board.killSwitch()); } catch (err) { handleErr(res, err); }
+  });
+
   // ─── Scheduled-for (PH-118) — MC-local file-backed store ───
 
   app.get('/api/board/schedules', (_req, res) => {
