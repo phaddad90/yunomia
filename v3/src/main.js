@@ -280,7 +280,16 @@ async function spawnAgent(code, model, cwd, opts = {}) {
     cursorBlink: true,
     fontFamily: 'JetBrains Mono, Menlo, Monaco, Consolas, monospace',
     fontSize: 13,
-    theme: { background: '#0b0b0c', foreground: '#e8e8e8', cursor: '#d93a00' },
+    theme: {
+      background: '#ffffff',
+      foreground: '#1a1a1a',
+      cursor: '#d93a00',
+      selectionBackground: '#ffe4d6',
+      black:   '#1a1a1a',  red:   '#d93a00',  green: '#16a34a',  yellow: '#a16207',
+      blue:    '#1d4ed8',  magenta:'#7e22ce', cyan:  '#0891b2',  white:  '#525252',
+      brightBlack:'#525252', brightRed:'#dc2626', brightGreen:'#15803d', brightYellow:'#854d0e',
+      brightBlue:'#1e40af', brightMagenta:'#6b21a8', brightCyan:'#0e7490', brightWhite:'#1a1a1a',
+    },
     convertEol: true,
     scrollback: 10_000,
   });
