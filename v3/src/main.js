@@ -234,7 +234,12 @@ async function submitSpawn() {
 }
 
 // Composite key — same agent code can run independently per project.
-function ptyKey(cwd, code) { return `${cwd}|${code}`; }
+// Must be Tauri-event-safe: only [A-Za-z0-9_-]. Slashes and pipes break
+// the `pty://output/<id>` event channel silently → black-screen pty.
+function ptyKey(cwd, code) {
+  const safe = String(cwd).replace(/[^A-Za-z0-9_-]/g, '_');
+  return `${safe}__${code}`;
+}
 function visibleAgents() {
   const out = [];
   for (const [key, ent] of state.ptys.entries()) {
@@ -294,7 +299,9 @@ async function spawnAgent(code, model, cwd, opts = {}) {
     if (ent) ent.lastStdoutAt = Date.now();
   });
   const unlistenExit = await listen(`pty://exit/${key}`, (evt) => {
-    term.writeln(`\r\n\x1b[31m[pty exited code=${evt.payload?.code ?? '?'}]\x1b[0m`);
+    const code = evt.payload?.code ?? '?';
+    term.writeln(`\r\n\x1b[31m[pty exited code=${code}]\x1b[0m`);
+    term.writeln(`\x1b[33mIf this happened immediately, the spawn args were rejected by claude. Check that the 'claude' CLI is on PATH and the --permission-mode flag is supported on this version.\x1b[0m`);
     const ent = state.ptys.get(key);
     if (ent) ent.exited = true;
   });
