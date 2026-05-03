@@ -24,12 +24,12 @@
   <main id="panes">
     <section class="pane active" data-pane="dashboard">
       <div id="dashboard-empty" class="mc-empty" hidden>
-        <h2>No MC backend reachable</h2>
-        <div>Yunomia couldn't reach <code id="mc-empty-url">…</code></div>
-        <div>Start it with: <code>cd app && npm run dev</code></div>
+        <h2>No MC backend configured</h2>
+        <div>Yunomia v3 is for the internal ERP. Connect it to that MC instance when it exists.</div>
+        <div>Until then, the dashboard tab stays empty — agent ptys still work via <b>+ Spawn agent</b>.</div>
         <div class="mc-actions">
-          <button id="mc-retry" class="btn-primary" type="button">Retry</button>
-          <button id="mc-configure" class="btn-ghost" type="button">Set MC URL…</button>
+          <button id="mc-configure" class="btn-primary" type="button">Set MC URL…</button>
+          <button id="mc-retry" class="btn-ghost" type="button">Retry</button>
         </div>
       </div>
       <iframe

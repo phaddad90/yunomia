@@ -24,10 +24,10 @@ const AGENT_MODELS_DEFAULT = {
   TA:  'claude-opus-4-7',
 };
 
-// PH-134 — MC base URL. Default :4600 (the MC instance currently running).
-// Override at runtime when an internal-ERP-specific MC exists:
-//   localStorage.setItem('mc.base', 'http://localhost:4700'); location.reload()
-export const MC_BASE = localStorage.getItem('mc.base') || 'http://localhost:4600';
+// PH-134 — MC base URL. NO default — v3 is for the internal ERP, not
+// PrintPepper. PrintPepper's :4600 must NEVER be auto-connected. The user
+// configures this once via the dashboard tab when an internal-ERP MC exists.
+export const MC_BASE = localStorage.getItem('mc.base') || '';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
@@ -229,17 +229,21 @@ function tabEmoji(code) {
 async function checkMcAndMountDashboard() {
   const indicator = document.getElementById('mc-indicator');
   const empty     = document.getElementById('dashboard-empty');
-  const emptyUrl  = document.getElementById('mc-empty-url');
   const frame     = document.getElementById('dashboard-frame');
-  if (indicator) indicator.textContent = `MC: ${MC_BASE}`;
-  if (emptyUrl)  emptyUrl.textContent = MC_BASE;
+  if (indicator) indicator.textContent = MC_BASE ? `MC: ${MC_BASE}` : 'MC: not configured';
+  if (!MC_BASE) {
+    indicator?.classList.remove('online'); indicator?.classList.add('offline');
+    if (frame) frame.style.display = 'none';
+    if (empty) empty.hidden = false;
+    return;
+  }
   let online = false;
   try {
     const r = await fetch(MC_BASE + '/health', { method: 'GET', cache: 'no-store' });
     online = r.ok;
   } catch { online = false; }
-  if (indicator) indicator.classList.toggle('online', online);
-  if (indicator) indicator.classList.toggle('offline', !online);
+  indicator?.classList.toggle('online', online);
+  indicator?.classList.toggle('offline', !online);
   if (online) {
     if (empty) empty.hidden = true;
     if (frame) { frame.src = MC_BASE + '/'; frame.style.display = ''; }

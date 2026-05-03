@@ -15,7 +15,8 @@ import { invoke } from '@tauri-apps/api/core';
 // PH-134 — read MC base from localStorage (set by main.js MC_BASE) so the WS
 // URL inherits whatever the dashboard iframe is pointed at. NEVER hardcode 4600.
 function mcWsUrl() {
-  const base = localStorage.getItem('mc.base') || 'http://localhost:4600';
+  const base = localStorage.getItem('mc.base') || '';
+  if (!base) return '';
   return base.replace(/^http/, 'ws') + '/ws';
 }
 
@@ -39,6 +40,10 @@ export function stopMcBridge() {
 function connect() {
   if (!cfg) return;
   const url = mcWsUrl();
+  if (!url) {
+    console.info('[mc-bridge] no MC URL configured — bridge inactive');
+    return;
+  }
   ws = new WebSocket(url);
   ws.addEventListener('open', () => console.info(`[mc-bridge] connected → ${url}`));
   ws.addEventListener('close', () => {
