@@ -610,8 +610,10 @@ async function refreshResumeBanner() {
   banner.querySelectorAll('.resume-btn').forEach((b) => {
     b.addEventListener('click', async () => {
       const sid = b.dataset.sid;
-      const code = prompt('Agent code to spawn this session as (e.g. CEO, QA):', 'CEO');
-      if (!code) return;
+      // Resume always loads as LEAD by default — onboarding sessions are the
+      // only ones we surface for resume. If you need a different role, kill
+      // the LEAD tab afterwards and Spawn again with a different code.
+      const code = 'LEAD';
       banner.remove();
       const model = state.stickyModels?.[code] || AGENT_MODELS_DEFAULT[code] || 'claude-sonnet-4-6';
       await spawnAgent(code, model, cwd, { resume: sid });
