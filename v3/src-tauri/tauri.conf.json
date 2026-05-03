@@ -36,7 +36,31 @@
       "icons/128x128@2x.png",
       "icons/icon.png"
     ],
-    "category": "DeveloperTool"
+    "category": "DeveloperTool",
+    "shortDescription": "Multi-agent orchestration shell",
+    "longDescription": "Yunomia hosts a project's full agent fleet - kanban, ticket inbox, bug-lessons archive, and a real Claude Code session per agent - in one window, file-backed locally. Onboarding via a Lead agent that interviews you, writes the brief, and proposes the team.",
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-",
+      "providerShortName": null,
+      "entitlements": null
+    },
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "wix": { "language": "en-US" }
+    },
+    "linux": {
+      "deb": { "depends": [] }
+    }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/phaddad90/Yunomia3/releases/latest/download/latest.json"
+      ],
+      "dialog": false,
+      "pubkey": "PLACEHOLDER_GENERATE_WITH_NPX_TAURI_SIGNER_GENERATE"
+    }
+  }
 }
