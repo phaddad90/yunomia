@@ -1,9 +1,9 @@
 {
-  "name": "yunomia-v3",
+  "name": "yunomia",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Yunomia v3 — Tauri shell hosting Claude Code sessions + MC dashboard.",
+  "description": "Yunomia — Tauri shell for hosting Claude Code agent fleets on any project.",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Yunomia</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
@@ -11,7 +12,6 @@
     <div class="brand">
       <span class="logo-dot"></span>
       <span class="brand-name">Yunomia</span>
-      <span class="brand-sub">v3</span>
     </div>
     <nav class="tabs" id="pane-tabs">
       <button class="tab active" data-pane="dashboard">📊 Dashboard</button>
@@ -29,8 +29,8 @@
     <section class="pane active" data-pane="dashboard">
       <div id="dashboard-empty" class="mc-empty" hidden>
         <h2>No MC backend configured</h2>
-        <div>Yunomia v3 is for the internal ERP. Connect it to that MC instance when it exists.</div>
-        <div>Until then, the dashboard tab stays empty — agent ptys still work via <b>+ Spawn agent</b>.</div>
+        <div>Yunomia works without a Mission Control backend — spawn agents directly via <b>+ Spawn agent</b>.</div>
+        <div>If you have an MC instance for this project, click <b>Set MC URL…</b> to connect.</div>
         <div class="mc-actions">
           <button id="mc-configure" class="btn-primary" type="button">Set MC URL…</button>
           <button id="mc-retry" class="btn-ghost" type="button">Retry</button>

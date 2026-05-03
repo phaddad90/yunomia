@@ -1,4 +1,4 @@
-// Yunomia v3 — two-layer heartbeat (PH-134 Phase 3).
+// Yunomia — two-layer heartbeat.
 //
 // Layer 0 — mechanical safety-net (zero LLM tokens). Every 30s, walks each
 // running pty: if we wrote a wakeup AT_T and the pty produced no stdout in

@@ -1,12 +1,12 @@
 [package]
-name = "yunomia-v3"
+name = "yunomia"
 version = "0.1.0"
 edition = "2021"
-description = "Yunomia v3 shell — Tauri host for Claude Code sessions + MC dashboard"
+description = "Yunomia — Tauri shell hosting Claude Code agent fleets per project"
 authors = ["TA"]
 
 [lib]
-name = "yunomia_v3_lib"
+name = "yunomia_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

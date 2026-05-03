@@ -1,5 +1,5 @@
-// Yunomia v3 — Tauri library entry. Spawns ptys, bridges them to the frontend
-// over Tauri events. Frontend mounts an xterm.js per pty.
+// Yunomia — Tauri library entry. Spawns ptys, bridges them to the frontend
+// over Tauri events. Frontend mounts an xterm.js per pty. Project-agnostic.
 
 mod pty;
 mod store;
@@ -28,14 +28,14 @@ pub fn run() {
         .setup(|app| {
             let _window = app.get_webview_window("main").expect("main window missing");
             store::start_sentinel_watcher(app.handle().clone());
-            log::info!("Yunomia v3 shell up");
+            log::info!("Yunomia shell up");
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
             if let RunEvent::ExitRequested { .. } = event {
-                log::info!("Yunomia v3 shell exiting");
+                log::info!("Yunomia shell exiting");
             }
         });
 }

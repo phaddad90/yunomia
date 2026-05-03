@@ -1,4 +1,4 @@
-// Yunomia v3 frontend — pane manager + xterm.js mounting per pty.
+// Yunomia frontend — pane manager + xterm.js mounting per pty.
 // Conventions:
 //   • Each pty has a stable string id (typically the AGENT code: "CEO", "QA").
 //   • Tauri events: `pty://output/<id>` carries stdout/stderr; `pty://exit/<id>` fires on child exit.
@@ -24,9 +24,8 @@ const AGENT_MODELS_DEFAULT = {
   TA:  'claude-opus-4-7',
 };
 
-// PH-134 — MC base URL. NO default — v3 is for the internal ERP, not
-// PrintPepper. PrintPepper's :4600 must NEVER be auto-connected. The user
-// configures this once via the dashboard tab when an internal-ERP MC exists.
+// MC base URL — no default. Yunomia is project-agnostic; the user sets a
+// Mission Control URL per project (or leaves it blank — ptys still work).
 export const MC_BASE = localStorage.getItem('mc.base') || '';
 
 const $ = (s, root = document) => root.querySelector(s);

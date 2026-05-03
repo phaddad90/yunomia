@@ -4996,7 +4996,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "yunomia-v3"
+name = "yunomia"
 version = "0.1.0"
 dependencies = [
  "anyhow",

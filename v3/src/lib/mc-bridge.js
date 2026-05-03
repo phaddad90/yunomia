@@ -1,4 +1,4 @@
-// Yunomia v3 — Mission Control bridge.
+// Yunomia — Mission Control bridge.
 //
 // Connects to the MC server WS (localhost:4600/ws) and dispatches events:
 //   • ticket.changed → if a running agent was just assigned a ticket, write a

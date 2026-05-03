@@ -1,4 +1,4 @@
-// Yunomia v3 — auto-compact orchestrator (PH-134 Phase 2).
+// Yunomia — auto-compact orchestrator.
 //
 // Two trigger paths per the locked spec:
 //   • Hard ceiling at 50%: must compact regardless of task state.
