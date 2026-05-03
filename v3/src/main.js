@@ -352,9 +352,23 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   // PH-134 onboarding — auto-paste the lead kickoff after pty boot. Two-second
   // delay so claude has finished its TUI splash before we shove the prompt in.
   if (opts.kickoff) {
-    setTimeout(() => {
-      void invoke('pty_write', { args: { id: key, data: opts.kickoff + '\n' } }).catch((e) => console.warn('kickoff paste failed', e));
-    }, 2000);
+    const ent = state.ptys.get(key);
+    if (ent && !ent.kickoffFired) {
+      ent.kickoffFired = true;
+      // Wait for claude TUI to settle, then paste prompt + carriage return.
+      // \r (CR) is what Enter sends in a real TTY — \n stays as a newline in
+      // the input box and never submits.
+      setTimeout(async () => {
+        try {
+          await invoke('pty_write', { args: { id: key, data: opts.kickoff } });
+          // Small gap so the paste lands before the submit.
+          await new Promise((r) => setTimeout(r, 250));
+          await invoke('pty_write', { args: { id: key, data: '\r' } });
+        } catch (e) {
+          console.warn('kickoff paste failed', e);
+        }
+      }, 2500);
+    }
   }
 }
 
