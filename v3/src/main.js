@@ -13,6 +13,7 @@ import { initCompactOrchestrator, noteTaskBoundary, firePreCompact } from './lib
 import { startHeartbeat, noteWakeupSent, noteStdoutFromAgent } from './lib/heartbeat.js';
 import { initKanban, setKanbanProject } from './lib/kanban.js';
 import { loadOnboardingForProject, renderOnboardingView, reopenOnboarding } from './lib/onboarding.js';
+import { refresh as refreshKanban, getTicketStats } from './lib/kanban.js';
 import { writeToAgent } from './lib/mc-bridge.js';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 
@@ -63,7 +64,7 @@ function projectLabel(p) {
   const parts = p.split('/').filter(Boolean);
   return parts[parts.length - 1] || p;
 }
-function renderProjectPicker() {
+async function renderProjectPicker() {
   const sel = $('#project-picker');
   if (!sel) return;
   sel.innerHTML = '';
@@ -72,10 +73,16 @@ function renderProjectPicker() {
     opt.value = ''; opt.textContent = '(none — click to add)'; opt.disabled = true; opt.selected = true;
     sel.appendChild(opt);
   } else {
+    // Annotate with a 🔴 prefix when phase=onboarding for that project.
     for (const p of state.projects) {
+      let prefix = '';
+      try {
+        const ps = await invoke('project_state_get', { args: { cwd: p } });
+        if (ps?.phase !== 'active') prefix = '🔴 ';
+      } catch { /* ignore */ }
       const opt = document.createElement('option');
       opt.value = p;
-      opt.textContent = projectLabel(p);
+      opt.textContent = `${prefix}${projectLabel(p)}`;
       opt.title = p;
       if (p === state.selectedProject) opt.selected = true;
       sel.appendChild(opt);
@@ -503,15 +510,19 @@ function renderAgentRail() {
     <button id="ar-add" class="ar-add" title="Spawn agent">+</button>
   </div>`;
   if (!running.length) {
-    root.innerHTML = `${head}<div class="ar-empty">No agents in this project yet. Click <b>+</b> to spawn one.</div>`;
+    root.innerHTML = `${head}<div class="ar-empty">No agents in this project yet. Click <b>+</b> to spawn one — or let the brief's proposed agents auto-populate after approval.</div>`;
   } else {
+    let stats;
+    try { stats = getTicketStats(); } catch { stats = { byAgent: {} }; }
     const list = running.map(({ key, ent }) => {
       const code = ent.code;
       const { state: stat, label } = deriveStatus(ent);
+      const ticketCount = stats.byAgent[code] || 0;
+      const ticketBadge = ticketCount > 0 ? `<span class="ar-tickets" title="${ticketCount} open ticket${ticketCount===1?'':'s'}">${ticketCount}</span>` : '';
       return `<li class="ar-row ar-${stat}" data-code="${code}" data-key="${key}">
         <span class="ar-emoji">${tabEmoji(code)}</span>
         <div class="ar-mid">
-          <span class="ar-code">${code}</span>
+          <span class="ar-code">${code} ${ticketBadge}</span>
           <span class="ar-label">${escapeHtml(label)} ${contextChipHtml(ent.contextEstimate)}</span>
         </div>
         <span class="ar-dot" data-status="${stat}"></span>
@@ -591,12 +602,69 @@ async function renderProjectView() {
       cwd,
       onWakeup: (payload) => onWakeup(payload),
     });
+    // Render brief preview panel above kanban (collapsed by default).
+    document.getElementById('brief-name').textContent = projState.project_name || projectLabel(cwd);
+    document.getElementById('brief-content').textContent = brief || '(empty — Lead never wrote a brief?)';
+    const reopenBtn = document.getElementById('brief-reopen');
+    if (reopenBtn && !reopenBtn.dataset.bound) {
+      reopenBtn.dataset.bound = '1';
+      reopenBtn.addEventListener('click', async () => {
+        if (!confirm('Re-open onboarding? Kanban will be hidden until you re-approve the brief.')) return;
+        await reopenOnboarding(state.selectedProject);
+        await renderProjectView();
+      });
+    }
   }
+  // Dashboard tab badge: open ticket count for the current project.
+  setTimeout(() => {
+    try {
+      const stats = getTicketStats();
+      const tab = document.querySelector('#pane-tabs .tab[data-pane="dashboard"]');
+      if (tab) {
+        let badge = tab.querySelector('.tab-badge');
+        if (stats.totalOpen > 0) {
+          if (!badge) { badge = document.createElement('span'); badge.className = 'tab-badge'; tab.appendChild(badge); }
+          badge.textContent = String(stats.totalOpen);
+        } else if (badge) {
+          badge.remove();
+        }
+      }
+    } catch { /* kanban may not be hydrated yet */ }
+  }, 200);
 }
 
 // Expose so the project picker triggers re-render too.
 window.__renderProjectView = renderProjectView;
 void renderProjectView();
+
+// Keyboard shortcuts — match IDE muscle memory.
+//   Cmd+T  = open spawn-agent modal (when active phase)
+//   Cmd+W  = close current tab (if not Dashboard)
+//   Cmd+1..9 = switch to nth tab
+window.addEventListener('keydown', (e) => {
+  const meta = e.metaKey || e.ctrlKey;
+  if (!meta) return;
+  // Cmd+T → spawn
+  if (e.key === 't' && !e.shiftKey) {
+    const btn = document.getElementById('spawn-agent');
+    if (btn && !btn.hidden) { e.preventDefault(); btn.click(); }
+    return;
+  }
+  // Cmd+W → close current pane (skip Dashboard)
+  if (e.key === 'w') {
+    if (state.activePane && state.activePane !== 'dashboard') {
+      e.preventDefault();
+      void killPty(state.activePane);
+    }
+    return;
+  }
+  // Cmd+1..9 → switch tab
+  if (e.key >= '1' && e.key <= '9') {
+    const tabs = $$('#pane-tabs .tab').filter((t) => t.style.display !== 'none');
+    const idx = parseInt(e.key, 10) - 1;
+    if (tabs[idx]) { e.preventDefault(); tabs[idx].click(); }
+  }
+});
 
 bindUi();
 

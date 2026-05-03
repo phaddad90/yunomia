@@ -41,6 +41,17 @@ export async function setKanbanProject(cwd) {
   await refresh();
 }
 
+// Stats for badges on Dashboard tab + agent rail.
+export function getTicketStats() {
+  const open = k.tickets.filter((t) => !['done','released'].includes(t.status));
+  const byAgent = {};
+  for (const t of open) {
+    const a = t.assignee_agent || '__unassigned';
+    byAgent[a] = (byAgent[a] || 0) + 1;
+  }
+  return { totalOpen: open.length, byAgent };
+}
+
 export async function refresh() {
   if (!k.cwd) {
     renderEmpty('Pick a project (top bar) to see its kanban.');
@@ -67,7 +78,8 @@ function render() {
   const root = $('#kanban-root');
   if (!root) return;
   if (!k.tickets.length) {
-    renderEmpty(`No tickets in <b>${escapeHtml(projectLabel(k.cwd))}</b>. Use the form on the right →`);
+    renderEmpty(`<div class="k-empty-h">Nothing here yet</div>
+      <div class="k-empty-sub">Lead's proposed tickets land here after you approve, or use the form on the right to file one manually.</div>`);
     return;
   }
   const cols = COLUMNS.map((c) => {
