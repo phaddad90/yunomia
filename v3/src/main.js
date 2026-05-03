@@ -338,6 +338,15 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   // collapses) re-fits the terminal to fill the pane.
   const ro = new ResizeObserver(() => { try { fit.fit(); } catch {} });
   ro.observe(termWrap);
+  // Mouse-wheel → scroll the terminal's scrollback. xterm normally hooks
+  // wheel itself but the flex wrapper can swallow events; explicit listener
+  // makes scrollback reliably reachable.
+  termWrap.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const linesPerPx = 1 / 16;
+    const delta = Math.sign(e.deltaY) * Math.max(1, Math.round(Math.abs(e.deltaY) * linesPerPx));
+    try { term.scrollLines(delta); } catch {}
+  }, { passive: false });
 
   setActivePane(key);
 
