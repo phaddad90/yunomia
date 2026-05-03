@@ -328,16 +328,7 @@ async function spawnAgent(code, model, cwd, opts = {}) {
     cursorBlink: true,
     fontFamily: 'JetBrains Mono, Menlo, Monaco, Consolas, monospace',
     fontSize: 13,
-    theme: {
-      background: '#ffffff',
-      foreground: '#1a1a1a',
-      cursor: '#d93a00',
-      selectionBackground: '#ffe4d6',
-      black:   '#1a1a1a',  red:   '#d93a00',  green: '#16a34a',  yellow: '#a16207',
-      blue:    '#1d4ed8',  magenta:'#7e22ce', cyan:  '#0891b2',  white:  '#525252',
-      brightBlack:'#525252', brightRed:'#dc2626', brightGreen:'#15803d', brightYellow:'#854d0e',
-      brightBlue:'#1e40af', brightMagenta:'#6b21a8', brightCyan:'#0e7490', brightWhite:'#1a1a1a',
-    },
+    theme: xtermTheme(),
     convertEol: true,
     scrollback: 10_000,
   });
@@ -853,6 +844,33 @@ function applyTheme() {
     resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
   document.documentElement.dataset.theme = resolved;
+  // Re-apply xterm theme to every running pty so the terminal pane follows.
+  const t = xtermTheme();
+  for (const ent of state.ptys?.values?.() || []) {
+    try { ent.term.options.theme = t; } catch { /* xterm v5 API */ }
+  }
+  // Term-wrap background (the area outside the canvas) too.
+  document.querySelectorAll('.pane .term-wrap').forEach((w) => { w.style.background = t.background; });
+}
+
+function xtermTheme() {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  if (dark) return {
+    background: '#0a0a0b', foreground: '#ededed',
+    cursor: '#ff5722', selectionBackground: '#3a1f17',
+    black: '#3f3f46', red: '#f87171', green: '#4ade80', yellow: '#facc15',
+    blue: '#60a5fa', magenta: '#c084fc', cyan: '#22d3ee', white: '#d4d4d8',
+    brightBlack: '#71717a', brightRed: '#fca5a5', brightGreen: '#86efac', brightYellow: '#fde68a',
+    brightBlue: '#93c5fd', brightMagenta: '#d8b4fe', brightCyan: '#67e8f9', brightWhite: '#fafafa',
+  };
+  return {
+    background: '#ffffff', foreground: '#1a1a1a',
+    cursor: '#d93a00', selectionBackground: '#ffe4d6',
+    black: '#1a1a1a', red: '#d93a00', green: '#16a34a', yellow: '#a16207',
+    blue: '#1d4ed8', magenta: '#7e22ce', cyan: '#0891b2', white: '#525252',
+    brightBlack: '#525252', brightRed: '#dc2626', brightGreen: '#15803d', brightYellow: '#854d0e',
+    brightBlue: '#1e40af', brightMagenta: '#6b21a8', brightCyan: '#0e7490', brightWhite: '#1a1a1a',
+  };
 }
 applyTheme();
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
