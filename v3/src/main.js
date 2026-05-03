@@ -158,7 +158,15 @@ function setActivePane(id) {
   $$('#pane-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.pane === id));
   $$('#panes .pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === id));
   const ent = state.ptys.get(id);
-  if (ent) requestAnimationFrame(() => ent.fit.fit());
+  if (ent) {
+    // The pane just transitioned from display:none to display:flex — its
+    // clientHeight only resolves after layout. Fit at multiple delays so the
+    // first paint, the first reflow, and a 250 ms-late paint all converge.
+    const f = () => { try { ent.fit.fit(); } catch {} };
+    requestAnimationFrame(() => requestAnimationFrame(f));
+    setTimeout(f, 100);
+    setTimeout(f, 300);
+  }
 }
 
 // Show/hide tabs + panes based on currently selected project.
