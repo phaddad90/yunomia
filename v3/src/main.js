@@ -9,7 +9,7 @@ import { listen } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { initCompactOrchestrator, noteTaskBoundary, firePreCompact } from './lib/compact-orchestrator.js';
+import { initCompactOrchestrator, noteTaskBoundary, firePreCompact, fireCompact, noteContextPercent } from './lib/compact-orchestrator.js';
 import { startHeartbeat, noteWakeupSent, noteStdoutFromAgent } from './lib/heartbeat.js';
 import { initKanban, setKanbanProject } from './lib/kanban.js';
 import { loadOnboardingForProject, renderOnboardingView, reopenOnboarding } from './lib/onboarding.js';
@@ -259,6 +259,11 @@ async function refreshContextStats() {
     try {
       const est = await invoke('agent_context_estimate', { args: { cwd: ent.cwd } });
       ent.contextEstimate = est || null;
+      // Auto-compact at 50% when idle.
+      if (est && ent.cwd === state.selectedProject) {
+        const status = deriveStatus(ent).state;
+        noteContextPercent(ent.code, est.percent, status === 'idle');
+      }
     } catch (e) { /* ignore — file probably not there yet */ }
   }
 }
@@ -545,6 +550,10 @@ function renderAgentRail() {
         <div class="ar-mid">
           <span class="ar-code">${code} ${ticketBadge}</span>
           <span class="ar-label">${escapeHtml(label)} ${contextChipHtml(ent.contextEstimate)}</span>
+          <span class="ar-cmpct-row">
+            <button class="ar-cmpct" data-act="precompact" title="Run /pre-compact">PRE</button>
+            <button class="ar-cmpct" data-act="compact" title="Run /compact">CMPCT</button>
+          </span>
         </div>
         <span class="ar-dot" data-status="${stat}"></span>
         <button class="ar-action" data-act="open" title="Open tab">↗</button>
@@ -563,6 +572,14 @@ function renderAgentRail() {
       e.stopPropagation();
       if (!confirm(`Kill ${row.dataset.code}?`)) return;
       void killPty(key);
+    });
+    row.querySelector('[data-act="precompact"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void firePreCompact(row.dataset.code);
+    });
+    row.querySelector('[data-act="compact"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void fireCompact(row.dataset.code);
     });
   });
 }
@@ -630,6 +647,50 @@ document.getElementById('filter-q')?.addEventListener('input', (e) => setKanbanF
 document.getElementById('filter-assignee')?.addEventListener('change', (e) => setKanbanFilter('assignee', e.target.value));
 document.getElementById('filter-type')?.addEventListener('change', (e) => setKanbanFilter('type', e.target.value));
 document.getElementById('filter-due')?.addEventListener('change', (e) => setKanbanFilter('due', e.target.value));
+
+// Agent proposal poller — Lead writes agent-proposal.json mid-project; we
+// surface it as a modal. User approves → ingests, spawns, clears the file.
+async function proposalTick() {
+  const cwd = state.selectedProject;
+  if (!cwd) return;
+  if (!document.getElementById('proposal-modal').classList.contains('hidden')) return; // already open
+  let p = null;
+  try { p = await invoke('agent_proposal_read', { args: { cwd } }); } catch { return; }
+  if (!p) return;
+  showProposalModal(p);
+}
+setInterval(proposalTick, 5000);
+setTimeout(proposalTick, 1500);
+
+function showProposalModal(p) {
+  const modal = document.getElementById('proposal-modal');
+  modal.querySelector('.proposal-summary').innerHTML = `
+    <div class="proposal-row"><b>Code</b> ${escapeHtml(p.code)}</div>
+    <div class="proposal-row"><b>Model</b> ${escapeHtml(p.model || 'claude-sonnet-4-6')}</div>
+    <div class="proposal-row"><b>Wakeup</b> ${escapeHtml(p.wakeup_mode || 'on-assignment')}${p.heartbeat_min ? ` · ${p.heartbeat_min} min` : ''}</div>
+    <div class="proposal-row"><b>Why</b> ${escapeHtml(p.reason || '(no reason)')}</div>
+  `;
+  modal.querySelectorAll('.proposal-pre').forEach((el) => {
+    el.textContent = p[el.dataset.field] || '(default — Yunomia will fill in)';
+  });
+  document.getElementById('proposal-approve').onclick = async () => {
+    try {
+      const agent = await invoke('agent_proposal_approve', { args: { cwd: state.selectedProject, proposal: p } });
+      modal.classList.add('hidden');
+      // Auto-spawn if heartbeat (orchestrator); else stay dormant until ticket assigned.
+      if (agent.wakeup_mode === 'heartbeat') {
+        try { await spawnAgent(agent.code, agent.model, state.selectedProject, {}); } catch {}
+      }
+      void renderProjectView();
+    } catch (err) { alert('Approve failed: ' + (err?.message || err)); }
+  };
+  document.getElementById('proposal-reject').onclick = async () => {
+    if (!confirm(`Reject ${p.code} proposal? Lead will need to write a new one.`)) return;
+    try { await invoke('agent_proposal_clear', { args: { cwd: state.selectedProject } }); } catch {}
+    modal.classList.add('hidden');
+  };
+  modal.classList.remove('hidden');
+}
 
 // Schedule poller — every 30s checks schedules_due_now; appends to inbox + osascript.
 async function scheduleTick() {
@@ -828,23 +889,7 @@ async function openSettings() {
     val.textContent = String(state.maxConcurrent);
     localStorage.setItem('yunomia.maxConcurrent', String(state.maxConcurrent));
   };
-  // Default models
-  try { state.stickyModels = await invoke('models_get'); } catch { /* ignore */ }
-  const wrap = document.getElementById('settings-models');
-  const codes = ['LEAD','CEO','SA','AD','WA','DA','QA','WD','TA'];
-  wrap.innerHTML = codes.map((c) => {
-    const cur = state.stickyModels?.[c] || AGENT_MODELS_DEFAULT[c] || 'claude-sonnet-4-6';
-    const opts = ['claude-sonnet-4-6','claude-opus-4-7','claude-haiku-4-5-20251001']
-      .map((m) => `<option value="${m}"${m===cur?' selected':''}>${m}</option>`).join('');
-    return `<label><span>${tabEmoji(c)} ${c}</span><select data-code="${c}">${opts}</select></label>`;
-  }).join('');
-  wrap.querySelectorAll('select').forEach((sel) => {
-    sel.addEventListener('change', async () => {
-      const code = sel.dataset.code;
-      try { await invoke('models_set', { args: { code, model: sel.value } }); state.stickyModels[code] = sel.value; }
-      catch (e) { console.warn('models_set failed', e); }
-    });
-  });
+  // Per-agent model defaults moved to per-project Agents tab.
   modal.classList.remove('hidden');
 }
 bindSettings();
@@ -914,7 +959,10 @@ async function refreshResumeBanner() {
   const recent = sessions.slice(0, 3);
   const html = recent.map((s) => {
     const when = s.modified ? new Date(s.modified).toLocaleString() : '?';
-    return `<button class="resume-btn" data-sid="${s.session_id}">Resume ${s.session_id.slice(0,8)} · ${when}</button>`;
+    return `<span class="resume-pill" data-sid="${s.session_id}">
+      <button class="resume-btn" data-sid="${s.session_id}">Resume ${s.session_id.slice(0,8)} · ${when}</button>
+      <button class="resume-kill" data-sid="${s.session_id}" title="Delete this session">🗑</button>
+    </span>`;
   }).join(' ');
   const banner = document.createElement('div');
   banner.className = 'resume-banner';
@@ -923,13 +971,23 @@ async function refreshResumeBanner() {
   banner.querySelectorAll('.resume-btn').forEach((b) => {
     b.addEventListener('click', async () => {
       const sid = b.dataset.sid;
-      // Resume always loads as LEAD by default — onboarding sessions are the
-      // only ones we surface for resume. If you need a different role, kill
-      // the LEAD tab afterwards and Spawn again with a different code.
       const code = 'LEAD';
       banner.remove();
       const model = state.stickyModels?.[code] || AGENT_MODELS_DEFAULT[code] || 'claude-sonnet-4-6';
       await spawnAgent(code, model, cwd, { resume: sid });
+    });
+  });
+  banner.querySelectorAll('.resume-kill').forEach((b) => {
+    b.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const sid = b.dataset.sid;
+      if (!confirm(`Delete session ${sid.slice(0,8)}? Conversation history will be lost permanently.`)) return;
+      try {
+        await invoke('delete_session', { args: { cwd, sessionId: sid } });
+        b.closest('.resume-pill')?.remove();
+        // If banner now empty, remove it.
+        if (!banner.querySelectorAll('.resume-pill').length) banner.remove();
+      } catch (err) { alert('Delete failed: ' + (err?.message || err)); }
     });
   });
   banner.querySelector('.resume-dismiss').addEventListener('click', () => banner.remove());

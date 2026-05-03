@@ -628,3 +628,39 @@ body {
   margin-left: auto; background: transparent; border: 0; cursor: pointer;
   font-size: 14px; color: #92400e;
 }
+.resume-pill {
+  display: inline-flex; align-items: stretch; border: 1px solid #fcd34d;
+  border-radius: var(--radius); overflow: hidden; background: white;
+}
+.resume-pill .resume-btn {
+  border: 0; border-right: 1px solid #fcd34d; padding: 3px 8px;
+}
+.resume-pill .resume-kill {
+  background: transparent; border: 0; padding: 3px 8px; cursor: pointer;
+  font-size: 12px; line-height: 1; color: #92400e;
+}
+.resume-pill .resume-kill:hover { background: #fee2e2; color: #b91c1c; }
+
+/* Per-agent compact buttons in the rail */
+.ar-cmpct {
+  font: inherit; font-size: 9px; padding: 1px 5px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface-2); cursor: pointer; color: var(--text-mid);
+  text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;
+  margin-left: 2px;
+}
+.ar-cmpct:hover { background: var(--pepper-soft); color: var(--pepper); border-color: var(--pepper); }
+
+/* Agent proposal modal */
+.proposal-card { min-width: 540px; max-width: 720px; max-height: 80vh; overflow-y: auto; }
+.proposal-body { font-size: 12px; }
+.proposal-summary { display: grid; grid-template-columns: 100px 1fr; gap: 4px 12px; margin-bottom: 16px; padding: 12px; background: var(--surface-2); border-radius: var(--radius); }
+.proposal-summary b { color: var(--text-mid); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
+.proposal-body details { margin: 6px 0; padding: 8px 12px; background: var(--surface-2); border-radius: var(--radius); }
+.proposal-body summary { cursor: pointer; font-weight: 600; font-size: 11px; color: var(--text-mid); text-transform: uppercase; letter-spacing: 0.05em; }
+.proposal-pre { margin: 8px 0 0; padding: 12px; background: var(--surface); border-radius: var(--radius); font-family: 'JetBrains Mono', monospace; font-size: 11px; white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
+
+/* Settings theme radios — fix overlap */
+.settings-row label { display: flex; gap: 6px; align-items: center; cursor: pointer; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); }
+.settings-row label:hover { background: var(--surface-2); }
+.settings-row input[type="radio"] { margin: 0; }

@@ -114,6 +114,36 @@
     </section>
   </main>
 
+  <!-- Agent proposal modal -->
+  <div id="proposal-modal" class="modal hidden">
+    <div class="modal-card proposal-card">
+      <header><h3>Lead proposes a new agent</h3></header>
+      <div class="proposal-body">
+        <div class="proposal-summary"></div>
+        <details>
+          <summary>Soul</summary>
+          <pre class="proposal-pre" data-field="soul_md"></pre>
+        </details>
+        <details>
+          <summary>Kickoff (sent on spawn)</summary>
+          <pre class="proposal-pre" data-field="kickoff_md"></pre>
+        </details>
+        <details>
+          <summary>Pre-compact instructions</summary>
+          <pre class="proposal-pre" data-field="pre_compact_md"></pre>
+        </details>
+        <details>
+          <summary>Reawaken prompt</summary>
+          <pre class="proposal-pre" data-field="reawaken_md"></pre>
+        </details>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="proposal-reject" class="btn-ghost">Reject</button>
+        <button type="button" id="proposal-approve" class="btn-primary">Approve & spawn</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Lesson capture modal -->
   <div id="lesson-modal" class="modal hidden">
     <div class="modal-card lesson-card">
@@ -170,10 +200,6 @@
             <span id="settings-max-concurrent-val"></span>
           </label>
         </div>
-      </section>
-      <section class="settings-section">
-        <h4>Default model per agent</h4>
-        <div id="settings-models" class="settings-models"></div>
       </section>
       <section class="settings-section">
         <h4>Keyboard shortcuts</h4>

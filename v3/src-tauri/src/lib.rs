@@ -26,6 +26,7 @@ pub fn run() {
             store::models_get,
             store::models_set,
             store::enumerate_sessions,
+            store::delete_session,
             store::agent_context_estimate,
             tickets::tickets_list,
             tickets::tickets_create,
@@ -61,6 +62,9 @@ pub fn run() {
             tickets::eligible_actions,
             tickets::kill_switch_get,
             tickets::kill_switch_set,
+            tickets::agent_proposal_read,
+            tickets::agent_proposal_clear,
+            tickets::agent_proposal_approve,
         ])
         .setup(|app| {
             let _window = app.get_webview_window("main").expect("main window missing");

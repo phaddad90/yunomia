@@ -356,6 +356,94 @@ pub fn brief_write(args: BriefWriteArgs) -> Result<(), String> {
     fs::write(&path, args.markdown).map_err(|e| e.to_string())
 }
 
+// Agent proposals — Lead writes a JSON file to ask the user to spawn a new
+// agent mid-project. Yunomia polls the file, surfaces a modal, ingests on
+// approve. Single proposal at a time (Lead overwrites).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AgentProposal {
+    pub code: String,
+    pub model: Option<String>,
+    pub wakeup_mode: Option<String>,
+    pub heartbeat_min: Option<u32>,
+    pub reason: String,                 // why this agent is being proposed
+    pub soul_md: Option<String>,        // short character sheet
+    pub kickoff_md: Option<String>,     // first-wake prompt
+    pub pre_compact_md: Option<String>, // /pre-compact summary instructions
+    pub reawaken_md: Option<String>,    // post-compact reawaken prompt
+    pub proposed_at: String,
+}
+fn agent_proposal_path(dir: &PathBuf) -> PathBuf { dir.join("agent-proposal.json") }
+#[derive(Deserialize)]
+pub struct AgentProposalReadArgs { pub cwd: String }
+#[tauri::command]
+pub fn agent_proposal_read(args: AgentProposalReadArgs) -> Result<Option<AgentProposal>, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let p = agent_proposal_path(&dir);
+    if !p.exists() { return Ok(None); }
+    let raw = fs::read_to_string(&p).map_err(|e| e.to_string())?;
+    if raw.trim().is_empty() { return Ok(None); }
+    serde_json::from_str(&raw).map(Some).map_err(|e| e.to_string())
+}
+#[derive(Deserialize)]
+pub struct AgentProposalClearArgs { pub cwd: String }
+#[tauri::command]
+pub fn agent_proposal_clear(args: AgentProposalClearArgs) -> Result<(), String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let p = agent_proposal_path(&dir);
+    if p.exists() { let _ = fs::remove_file(p); }
+    Ok(())
+}
+
+// Approve a proposal: writes the four agent files, adds to project_agents.
+#[derive(Deserialize)]
+pub struct AgentProposalApproveArgs {
+    pub cwd: String,
+    pub proposal: AgentProposal,
+}
+#[tauri::command]
+pub fn agent_proposal_approve(args: AgentProposalApproveArgs) -> Result<ProjectAgent, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let agent_dir = dir.join("agents").join(&args.proposal.code);
+    fs::create_dir_all(&agent_dir).map_err(|e| e.to_string())?;
+    let p = &args.proposal;
+    fs::write(agent_dir.join("soul.md"),         default_text(&p.soul_md,         &default_soul(&p.code, &p.reason))).map_err(|e| e.to_string())?;
+    fs::write(agent_dir.join("kickoff.md"),      default_text(&p.kickoff_md,      &default_kickoff(&p.code, &p.reason))).map_err(|e| e.to_string())?;
+    fs::write(agent_dir.join("pre-compact.md"),  default_text(&p.pre_compact_md,  &default_pre_compact(&p.code))).map_err(|e| e.to_string())?;
+    fs::write(agent_dir.join("reawaken.md"),     default_text(&p.reawaken_md,     &default_reawaken(&p.code))).map_err(|e| e.to_string())?;
+    let agent = ProjectAgent {
+        code: p.code.clone(),
+        model: p.model.clone().unwrap_or_else(|| "claude-sonnet-4-6".into()),
+        wakeup_mode: p.wakeup_mode.clone().unwrap_or_else(|| "on-assignment".into()),
+        heartbeat_min: p.heartbeat_min.unwrap_or(60),
+        note: Some(p.reason.clone()),
+    };
+    let path = dir.join("agents.json");
+    let mut existing: Vec<ProjectAgent> = read_json(&path)?;
+    existing.retain(|x| x.code != agent.code);
+    existing.push(agent.clone());
+    write_json(&path, &existing)?;
+    // Clear proposal so the modal doesn't re-fire.
+    let _ = fs::remove_file(agent_proposal_path(&dir));
+    write_audit(&dir, "agent.approved", "", "user", serde_json::json!({ "code": agent.code }))?;
+    Ok(agent)
+}
+
+fn default_text(opt: &Option<String>, fallback: &str) -> String {
+    opt.as_deref().filter(|s| !s.trim().is_empty()).map(String::from).unwrap_or_else(|| fallback.into())
+}
+fn default_soul(code: &str, reason: &str) -> String {
+    format!("# {} — Soul\n\nRole proposed by Lead: {}\n\n## Voice\n- Direct, technical, terse.\n- Pushes back on fuzzy scope.\n- Cites evidence over opinion.\n\n## Expertise\n(populate during onboarding)\n\n## Operating principles\n- Single-task focus.\n- Document decisions in tickets, not chat.\n- File a bug lesson on every defect closure.\n", code, reason)
+}
+fn default_kickoff(code: &str, reason: &str) -> String {
+    format!("You are {} — newly spawned by the project Lead.\n\nReason: {}\n\nFirst-wake actions:\n1. Read your soul, goals, and the project brief.\n2. Check your queue (assigned tickets in this project's kanban).\n3. If queue is empty, idle until something lands.\n\nUse Yunomia's kanban via the file-backed JSON store. Comments + transitions ripple through the dashboard automatically.\n", code, reason)
+}
+fn default_pre_compact(code: &str) -> String {
+    format!("/pre-compact for {}.\n\nSummarise:\n- Tickets touched this session (human ids + verdict).\n- Open questions you didn't get to.\n- Files modified.\n- Lessons learnt (file them as BL-NNN before /compact).\n- State you'll need to resume cleanly.\n\nWrite a 200–500 word summary. Then trigger /compact.\n", code)
+}
+fn default_reawaken(code: &str) -> String {
+    format!("Reawaken — {}\n\nYou were /compact'd. Read your soul + goals + the most recent BL filed under this project. Then check your queue. If you find a stale in_progress ticket assigned to you, resume it.\n", code)
+}
+
 // Schedules — per-ticket scheduled_for.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Schedule {

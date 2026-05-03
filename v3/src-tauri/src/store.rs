@@ -194,6 +194,25 @@ pub fn agent_context_estimate(args: ContextEstimateArgs) -> Result<Option<Contex
     }))
 }
 
+// Delete a Claude Code session file (the JSONL conversation history). Used
+// by the Resume banner's per-entry × button. Path is sanitised so a caller
+// can't escape ~/.claude/projects/.
+#[derive(Deserialize)]
+pub struct DeleteSessionArgs { pub cwd: String, pub session_id: String }
+#[tauri::command]
+pub fn delete_session(args: DeleteSessionArgs) -> Result<(), String> {
+    if args.session_id.contains('/') || args.session_id.contains('.') {
+        return Err("invalid session id".into());
+    }
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let sanitised = args.cwd.trim_start_matches('/').replace('/', "-").replace('.', "-");
+    let path = PathBuf::from(&home).join(".claude").join("projects").join(format!("-{}", sanitised)).join(format!("{}.jsonl", args.session_id));
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // PH-134 Phase 3 — pty stdin audit log. Append every byte written to an agent's
 // stdin to ~/.printpepper/pty-audit-<AGENT>.log with timestamp.
 pub fn audit_pty_write(agent_code: &str, data: &str) {

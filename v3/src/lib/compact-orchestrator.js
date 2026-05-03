@@ -52,6 +52,24 @@ export function shutdownCompactOrchestrator() {
   state.agents.clear();
 }
 
+// Stats-aware idle auto-compact: when context >= 50% AND agent has been
+// idle (no stdout) for >= 30s, fire /pre-compact then /compact. Caller is
+// responsible for telling the orchestrator the current context % via
+// noteContextPercent.
+const lastIdleCheck = new Map();   // agentCode → ms timestamp
+export function noteContextPercent(agentCode, percent, isIdle) {
+  if (!agentCode) return;
+  if (percent < 50) return;
+  if (!isIdle) return;
+  // Don't fire more than once every 5 min for the same agent.
+  const last = lastIdleCheck.get(agentCode) || 0;
+  if (Date.now() - last < 5 * 60_000) return;
+  if (state.agents.get(agentCode)?.pendingPreCompact) return;
+  lastIdleCheck.set(agentCode, Date.now());
+  console.info(`[compact] auto-fire for ${agentCode} (context ${percent}%, idle)`);
+  void firePreCompact(agentCode);
+}
+
 // Called by mc-bridge on each task-boundary event.
 export function noteTaskBoundary({ agentCode }) {
   if (!agentCode) return;
@@ -64,6 +82,13 @@ export function noteTaskBoundary({ agentCode }) {
   if (ent.boundaryCount >= STUB_TRIGGER_EVERY) {
     void firePreCompact(agentCode);
   }
+}
+
+// Manual trigger from UI button (or auto-fire from noteContextPercent).
+export async function fireCompact(agentCode) {
+  // Send /compact directly (bypasses pre-compact).
+  try { await writeToAgent(agentCode, '/compact\n'); }
+  catch (err) { console.warn(`[compact] /compact write failed for ${agentCode}`, err); }
 }
 
 // Manual trigger from UI button (or from the hard-ceiling stats path
