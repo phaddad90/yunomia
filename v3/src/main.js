@@ -422,22 +422,24 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   catch (e) { console.warn('models_set failed', e); }
   // PH-134 onboarding — auto-paste the lead kickoff after pty boot. Two-second
   // delay so claude has finished its TUI splash before we shove the prompt in.
-  if (opts.kickoff) {
+  // Determine kickoff content: explicit opts.kickoff (Lead bootstrap) wins,
+  // else read the per-agent kickoff.md from the project. If empty, no paste.
+  let kickoffContent = opts.kickoff || '';
+  if (!kickoffContent && code !== 'LEAD') {
+    try {
+      kickoffContent = await invoke('agent_file_get', { args: { cwd, code, kind: 'kickoff' } }) || '';
+    } catch { /* ignore */ }
+  }
+  if (kickoffContent && kickoffContent.trim()) {
     const ent = state.ptys.get(key);
     if (ent && !ent.kickoffFired) {
       ent.kickoffFired = true;
-      // Wait for claude TUI to settle, then paste prompt + carriage return.
-      // \r (CR) is what Enter sends in a real TTY — \n stays as a newline in
-      // the input box and never submits.
       setTimeout(async () => {
         try {
-          await invoke('pty_write', { args: { id: key, data: opts.kickoff } });
-          // Small gap so the paste lands before the submit.
+          await invoke('pty_write', { args: { id: key, data: kickoffContent } });
           await new Promise((r) => setTimeout(r, 250));
           await invoke('pty_write', { args: { id: key, data: '\r' } });
-        } catch (e) {
-          console.warn('kickoff paste failed', e);
-        }
+        } catch (e) { console.warn('kickoff paste failed', e); }
       }, 2500);
     }
   }
@@ -648,12 +650,20 @@ async function scheduleTick() {
 setInterval(scheduleTick, 30_000);
 setTimeout(scheduleTick, 3000);
 
-// Brief auto-refresh poll (only when in onboarding view).
+// Brief auto-refresh poll — preserves form inputs by only updating the
+// brief <pre> content, not re-running the whole render.
 setInterval(async () => {
   if (document.getElementById('onboarding-root')?.hidden) return;
-  if (!state.selectedProject) return;
-  // Re-render onboarding (cheap — re-reads brief.md).
-  void renderProjectView();
+  const cwd = state.selectedProject;
+  if (!cwd) return;
+  try {
+    const fresh = await invoke('brief_get', { args: { cwd } });
+    const pre = document.querySelector('.onb-brief');
+    if (pre && fresh) {
+      // Only update if changed — avoids cursor jump if user is selecting text.
+      if (pre.textContent !== fresh) pre.textContent = fresh;
+    }
+  } catch { /* ignore */ }
 }, 3000);
 
 // Project view switcher — onboarding (no project, or phase=onboarding) vs

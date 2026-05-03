@@ -215,6 +215,17 @@ export function renderOnboardingView({ container, cwd, state, brief, spawnAgent,
         try { await invoke('project_agents_upsert', { args: { cwd, agents } }); } catch {}
       }
       try { await invoke('proposals_clear', { args: { cwd } }); } catch {}
+      // Auto-spawn the proposed heartbeat agents (orchestrators) so they
+      // come up live. on-assignment workers stay dormant until a ticket lands.
+      const heartbeatAgents = (proposals.agents || []).filter((a) =>
+        (a.wakeup_mode || (a.code === 'LEAD' || a.code === 'CEO' ? 'heartbeat' : 'on-assignment')) === 'heartbeat'
+      );
+      for (const a of heartbeatAgents) {
+        if (a.code === 'LEAD') continue;   // Lead is already running
+        try {
+          await spawnAgent(a.code, a.model || 'claude-sonnet-4-6', cwd, {});
+        } catch (err) { console.warn('auto-spawn failed', a.code, err); }
+      }
       await approveBrief(cwd);
       onApproved && onApproved();
       return;

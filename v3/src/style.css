@@ -41,7 +41,7 @@ body {
 .brand { display: flex; align-items: center; gap: 8px; }
 .brand-name { font-weight: 700; font-size: 14px; }
 .brand-sub { font-size: 11px; color: var(--text-mid); }
-.logo-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--pepper); display: inline-block; }
+.logo { display: block; width: 22px; height: 22px; flex-shrink: 0; }
 .actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 .project-picker-wrap {
   display: flex; align-items: center; gap: 6px;
