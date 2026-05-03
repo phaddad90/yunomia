@@ -477,18 +477,21 @@ function escapeHtml(s) {
 // active (full kanban). Re-renders on project change + after brief approval.
 async function renderProjectView() {
   applyProjectVisibility();
-  const onbRoot   = document.getElementById('onboarding-root');
+  const onbRoot    = document.getElementById('onboarding-root');
   const activeRoot = document.getElementById('dashboard-active');
+  const spawnBtn   = document.getElementById('spawn-agent');
   const cwd = state.selectedProject;
   if (!cwd) {
     if (onbRoot)   { onbRoot.hidden = false; onbRoot.innerHTML = `<div class="onb-empty">Pick or add a project (top bar) to begin.</div>`; }
     if (activeRoot) activeRoot.hidden = true;
+    if (spawnBtn)   spawnBtn.hidden = true;     // no project → no manual spawn
     return;
   }
   const { state: projState, brief } = await loadOnboardingForProject(cwd);
   if (projState.phase !== 'active') {
     if (activeRoot) activeRoot.hidden = true;
     if (onbRoot)    onbRoot.hidden = false;
+    if (spawnBtn)   spawnBtn.hidden = true;     // onboarding spawns Lead via the onb CTA
     renderOnboardingView({
       container: onbRoot,
       cwd,
@@ -500,6 +503,7 @@ async function renderProjectView() {
   } else {
     if (onbRoot)    onbRoot.hidden = true;
     if (activeRoot) activeRoot.hidden = false;
+    if (spawnBtn)   spawnBtn.hidden = false;    // active → manual spawn allowed
     initKanban({
       cwd,
       onWakeup: (payload) => onWakeup(payload),
