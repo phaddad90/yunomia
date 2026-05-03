@@ -30,6 +30,18 @@ body {
 .brand-sub { font-size: 11px; color: var(--text-mid); }
 .logo-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--pepper); display: inline-block; }
 .actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.project-picker-wrap {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-mid); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.project-picker-wrap select {
+  font: inherit; font-size: 12px; font-weight: 500; text-transform: none;
+  letter-spacing: 0; color: var(--text-hi);
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); cursor: pointer; max-width: 240px;
+}
+.project-picker-wrap select:hover { border-color: var(--pepper); }
 .mc-indicator {
   font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-low);
   padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius);

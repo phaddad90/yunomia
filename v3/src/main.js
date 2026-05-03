@@ -38,7 +38,75 @@ const state = {
   stickyModels: {},        // PH-134 Phase 2: agent → model, persisted via Rust store
   maxConcurrent: 3,        // PH-134 Phase 3: concurrency limit slider
   tempAgents: new Set(),   // PH-134 Phase 3: agents flagged for auto-dispose after one task
+  projects: [],            // PH-134: known project roots, persisted in localStorage
+  selectedProject: '',     // current project cwd (drives spawn + resume)
 };
+
+// localStorage keys for projects.
+const LS_PROJECTS = 'yunomia.projects';
+const LS_SELECTED = 'yunomia.selectedProject';
+const ADD_PROJECT_VALUE = '__add__';
+
+function loadProjects() {
+  try {
+    state.projects = JSON.parse(localStorage.getItem(LS_PROJECTS) || '[]');
+  } catch { state.projects = []; }
+  state.selectedProject = localStorage.getItem(LS_SELECTED) || state.projects[0] || '';
+}
+function saveProjects() {
+  localStorage.setItem(LS_PROJECTS, JSON.stringify(state.projects));
+  localStorage.setItem(LS_SELECTED, state.selectedProject || '');
+}
+function projectLabel(p) {
+  // Show last path segment as label.
+  if (!p) return '?';
+  const parts = p.split('/').filter(Boolean);
+  return parts[parts.length - 1] || p;
+}
+function renderProjectPicker() {
+  const sel = $('#project-picker');
+  if (!sel) return;
+  sel.innerHTML = '';
+  if (!state.projects.length) {
+    const opt = document.createElement('option');
+    opt.value = ''; opt.textContent = '(none — click to add)'; opt.disabled = true; opt.selected = true;
+    sel.appendChild(opt);
+  } else {
+    for (const p of state.projects) {
+      const opt = document.createElement('option');
+      opt.value = p;
+      opt.textContent = projectLabel(p);
+      opt.title = p;
+      if (p === state.selectedProject) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
+  const addOpt = document.createElement('option');
+  addOpt.value = ADD_PROJECT_VALUE; addOpt.textContent = '+ Add project…';
+  sel.appendChild(addOpt);
+}
+function bindProjectPicker() {
+  const sel = $('#project-picker');
+  sel.addEventListener('change', () => {
+    if (sel.value === ADD_PROJECT_VALUE) {
+      const next = prompt('Project root absolute path:', state.selectedProject || '/Users/peter/Desktop/');
+      if (next && next.trim()) {
+        const path = next.trim().replace(/\/$/, '');
+        if (!state.projects.includes(path)) state.projects.push(path);
+        state.selectedProject = path;
+        saveProjects();
+        renderProjectPicker();
+        void refreshResumeBanner();
+      } else {
+        renderProjectPicker();   // restore previous selection
+      }
+      return;
+    }
+    state.selectedProject = sel.value;
+    saveProjects();
+    void refreshResumeBanner();
+  });
+}
 
 function setActivePane(id) {
   state.activePane = id;
@@ -65,6 +133,10 @@ async function openSpawnModal() {
   // Pre-fill model from sticky persistence per agent code.
   try { state.stickyModels = await invoke('models_get'); } catch { /* ignore */ }
   syncSpawnModelDefault();
+  // Pre-fill cwd from the picked project root.
+  const cwdInput = $('#spawn-cwd');
+  if (cwdInput) cwdInput.value = state.selectedProject || '';
+  if (cwdInput) cwdInput.placeholder = state.selectedProject || 'absolute path';
   $('#spawn-code').addEventListener('change', syncSpawnModelDefault, { once: false });
   $('#spawn-modal').classList.remove('hidden');
 }
@@ -79,7 +151,15 @@ function closeSpawnModal() { $('#spawn-modal').classList.add('hidden'); }
 async function submitSpawn() {
   const code = $('#spawn-code').value;
   const model = $('#spawn-model').value || AGENT_MODELS_DEFAULT[code] || 'claude-sonnet-4-6';
-  const cwd = ($('#spawn-cwd').value || '/Users/peter/Desktop/Project Eunomia').trim();
+  const cwd = ($('#spawn-cwd').value || state.selectedProject || '').trim();
+  if (!cwd) { alert('Pick a project first (top-bar).'); return; }
+  // Auto-add to project list if it's a new path.
+  if (!state.projects.includes(cwd)) {
+    state.projects.push(cwd);
+    state.selectedProject = cwd;
+    saveProjects();
+    renderProjectPicker();
+  }
   const temp = $('#spawn-temp')?.checked || false;
   // PH-134 Phase 3 — concurrency limit guard.
   if (state.ptys.size >= state.maxConcurrent) {
@@ -225,6 +305,12 @@ function tabEmoji(code) {
   return e[code] || '⬛';
 }
 
+// Project picker — load + render at boot, drives spawn cwd + resume banner.
+loadProjects();
+renderProjectPicker();
+bindProjectPicker();
+void refreshResumeBanner();
+
 // Wire the iframe + MC indicator + reachability fallback at boot.
 async function checkMcAndMountDashboard() {
   const indicator = document.getElementById('mc-indicator');
@@ -280,18 +366,16 @@ startHeartbeat({
   rewakeAgent: (code, ticketHumanId, reason) => onWakeup({ agentCode: code, ticketHumanId, reason }),
 });
 
-// PH-134 Phase 3 — crash recovery: enumerate recent sessions for current cwd.
-// Frontend renders a banner offering "Resume" for any session not currently
-// attached. Click → spawn --resume <session_id> in a new pty.
-async function enumerateRecentSessions() {
+// PH-134 Phase 3 — crash recovery. Enumerates recent Claude sessions for the
+// currently-selected project root and renders a banner offering Resume.
+async function refreshResumeBanner() {
+  document.querySelectorAll('.resume-banner').forEach((b) => b.remove());
+  const cwd = state.selectedProject;
+  if (!cwd) return;
+  let sessions = [];
   try {
-    const cwd = '/Users/peter/Desktop/Project Eunomia';
-    const sessions = await invoke('enumerate_sessions', { args: { cwd, limit: 8 } });
-    return sessions || [];
-  } catch (err) { console.warn('enumerate_sessions failed', err); return []; }
-}
-async function showResumeBannerIfAny() {
-  const sessions = await enumerateRecentSessions();
+    sessions = await invoke('enumerate_sessions', { args: { cwd, limit: 8 } }) || [];
+  } catch (err) { console.warn('enumerate_sessions failed', err); return; }
   if (!sessions.length) return;
   const recent = sessions.slice(0, 3);
   const html = recent.map((s) => {
@@ -300,7 +384,7 @@ async function showResumeBannerIfAny() {
   }).join(' ');
   const banner = document.createElement('div');
   banner.className = 'resume-banner';
-  banner.innerHTML = `<span>Recent Claude sessions for this project:</span> ${html} <button class="resume-dismiss" type="button">✕</button>`;
+  banner.innerHTML = `<span>Recent sessions in <b>${projectLabel(cwd)}</b>:</span> ${html} <button class="resume-dismiss" type="button">✕</button>`;
   document.body.insertBefore(banner, document.body.firstChild);
   banner.querySelectorAll('.resume-btn').forEach((b) => {
     b.addEventListener('click', async () => {
@@ -309,12 +393,11 @@ async function showResumeBannerIfAny() {
       if (!code) return;
       banner.remove();
       const model = state.stickyModels?.[code] || AGENT_MODELS_DEFAULT[code] || 'claude-sonnet-4-6';
-      await spawnAgent(code, model, '/Users/peter/Desktop/Project Eunomia', { resume: sid });
+      await spawnAgent(code, model, cwd, { resume: sid });
     });
   });
   banner.querySelector('.resume-dismiss').addEventListener('click', () => banner.remove());
 }
-void showResumeBannerIfAny();
 
 // Expose for console debugging during dogfood.
 window.yunomia = { state, firePreCompact };

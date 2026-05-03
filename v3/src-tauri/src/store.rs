@@ -8,16 +8,18 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
-fn printpepper_dir() -> PathBuf {
+// PH-134 — Yunomia v3 owns its own state dir. NOT ~/.printpepper/. Decoupled
+// from PrintPepper completely.
+fn yunomia_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".printpepper")
+    PathBuf::from(home).join(".yunomia")
 }
 
 fn agent_models_path() -> PathBuf {
-    printpepper_dir().join("agent-models.json")
+    yunomia_dir().join("agent-models.json")
 }
 
-fn audit_dir() -> PathBuf { printpepper_dir() }
+fn audit_dir() -> PathBuf { yunomia_dir() }
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 struct ModelsFile {
@@ -42,7 +44,7 @@ pub struct ModelsSetArgs {
 #[tauri::command]
 pub fn models_set(args: ModelsSetArgs) -> Result<(), String> {
     let path = agent_models_path();
-    fs::create_dir_all(printpepper_dir()).map_err(|e| e.to_string())?;
+    fs::create_dir_all(yunomia_dir()).map_err(|e| e.to_string())?;
     let mut current = if path.exists() {
         let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
         serde_json::from_str::<ModelsFile>(&raw).map_err(|e| e.to_string())?
