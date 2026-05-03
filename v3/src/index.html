@@ -21,26 +21,49 @@
         <span>Project</span>
         <select id="project-picker" aria-label="Project root"></select>
       </label>
-      <span id="mc-indicator" class="mc-indicator">MC: …</span>
       <button id="spawn-agent" class="btn-primary" type="button">+ Spawn agent</button>
     </div>
   </header>
   <main id="panes">
     <section class="pane active" data-pane="dashboard">
-      <div id="dashboard-empty" class="mc-empty" hidden>
-        <h2>No MC backend configured</h2>
-        <div>Yunomia works without a Mission Control backend — spawn agents directly via <b>+ Spawn agent</b>.</div>
-        <div>If you have an MC instance for this project, click <b>Set MC URL…</b> to connect.</div>
-        <div class="mc-actions">
-          <button id="mc-configure" class="btn-primary" type="button">Set MC URL…</button>
-          <button id="mc-retry" class="btn-ghost" type="button">Retry</button>
-        </div>
+      <div class="dashboard-layout">
+        <div id="kanban-root" class="kanban-root"></div>
+        <aside class="rail-right">
+          <h3>New ticket</h3>
+          <form id="new-ticket-form" class="new-ticket-form">
+            <input id="nt-title" type="text" placeholder="Title (optional — auto from first line)" maxlength="180" />
+            <textarea id="nt-body" rows="5" placeholder="What needs doing?" required></textarea>
+            <div class="nt-row">
+              <select id="nt-type" title="Type">
+                <option value="ops" selected>Ops</option>
+                <option value="bug">Bug</option>
+                <option value="feature">Feature</option>
+                <option value="doc">Doc</option>
+                <option value="migration">Migration</option>
+                <option value="gate">Gate</option>
+              </select>
+              <select id="nt-audience" title="Audience">
+                <option value="admin" selected>Admin</option>
+                <option value="app">App</option>
+              </select>
+              <select id="nt-assignee" title="Assignee">
+                <option value="">— unassigned</option>
+                <option value="CEO">🎯 CEO</option>
+                <option value="SA">🟧 SA</option>
+                <option value="AD">🟦 AD</option>
+                <option value="WA">🟪 WA</option>
+                <option value="DA">🟨 DA</option>
+                <option value="QA">🟥 QA</option>
+                <option value="WD">🌐 WD</option>
+                <option value="TA">🛠 TA</option>
+                <option value="PETER">🎩 PETER</option>
+              </select>
+            </div>
+            <button type="submit" class="btn-primary">Create</button>
+          </form>
+        </aside>
       </div>
-      <iframe
-        id="dashboard-frame"
-        title="Mission Control dashboard"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-      ></iframe>
+      <aside id="k-side" class="k-side hidden"></aside>
     </section>
   </main>
 

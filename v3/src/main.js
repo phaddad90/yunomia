@@ -9,9 +9,10 @@ import { listen } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { startMcBridge, writeToAgent } from './lib/mc-bridge.js';
 import { initCompactOrchestrator, noteTaskBoundary, firePreCompact } from './lib/compact-orchestrator.js';
 import { startHeartbeat, noteWakeupSent, noteStdoutFromAgent } from './lib/heartbeat.js';
+import { initKanban, setKanbanProject } from './lib/kanban.js';
+import { writeToAgent } from './lib/mc-bridge.js';
 
 const AGENT_MODELS_DEFAULT = {
   CEO: 'claude-opus-4-7',
@@ -24,9 +25,6 @@ const AGENT_MODELS_DEFAULT = {
   TA:  'claude-opus-4-7',
 };
 
-// MC base URL — no default. Yunomia is project-agnostic; the user sets a
-// Mission Control URL per project (or leaves it blank — ptys still work).
-export const MC_BASE = localStorage.getItem('mc.base') || '';
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
@@ -96,6 +94,7 @@ function bindProjectPicker() {
         saveProjects();
         renderProjectPicker();
         void refreshResumeBanner();
+        void setKanbanProject(path);
       } else {
         renderProjectPicker();   // restore previous selection
       }
@@ -104,6 +103,7 @@ function bindProjectPicker() {
     state.selectedProject = sel.value;
     saveProjects();
     void refreshResumeBanner();
+    void setKanbanProject(state.selectedProject);
   });
 }
 
@@ -158,6 +158,7 @@ async function submitSpawn() {
     state.selectedProject = cwd;
     saveProjects();
     renderProjectPicker();
+    void setKanbanProject(cwd);
   }
   const temp = $('#spawn-temp')?.checked || false;
   // PH-134 Phase 3 — concurrency limit guard.
@@ -310,40 +311,10 @@ renderProjectPicker();
 bindProjectPicker();
 void refreshResumeBanner();
 
-// Wire the iframe + MC indicator + reachability fallback at boot.
-async function checkMcAndMountDashboard() {
-  const indicator = document.getElementById('mc-indicator');
-  const empty     = document.getElementById('dashboard-empty');
-  const frame     = document.getElementById('dashboard-frame');
-  if (indicator) indicator.textContent = MC_BASE ? `MC: ${MC_BASE}` : 'MC: not configured';
-  if (!MC_BASE) {
-    indicator?.classList.remove('online'); indicator?.classList.add('offline');
-    if (frame) frame.style.display = 'none';
-    if (empty) empty.hidden = false;
-    return;
-  }
-  let online = false;
-  try {
-    const r = await fetch(MC_BASE + '/health', { method: 'GET', cache: 'no-store' });
-    online = r.ok;
-  } catch { online = false; }
-  indicator?.classList.toggle('online', online);
-  indicator?.classList.toggle('offline', !online);
-  if (online) {
-    if (empty) empty.hidden = true;
-    if (frame) { frame.src = MC_BASE + '/'; frame.style.display = ''; }
-  } else {
-    if (frame) frame.style.display = 'none';
-    if (empty) empty.hidden = false;
-  }
-}
-void checkMcAndMountDashboard();
-document.addEventListener('click', (e) => {
-  if (e.target?.id === 'mc-retry') void checkMcAndMountDashboard();
-  if (e.target?.id === 'mc-configure') {
-    const next = prompt('MC base URL:', MC_BASE);
-    if (next) { localStorage.setItem('mc.base', next); location.reload(); }
-  }
+// Boot the embedded kanban on the dashboard tab.
+initKanban({
+  cwd: state.selectedProject,
+  onWakeup: (payload) => onWakeup(payload),
 });
 
 bindUi();

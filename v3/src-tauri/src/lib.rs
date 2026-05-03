@@ -3,6 +3,7 @@
 
 mod pty;
 mod store;
+mod tickets;
 
 use tauri::{Manager, RunEvent};
 
@@ -24,6 +25,12 @@ pub fn run() {
             store::models_get,
             store::models_set,
             store::enumerate_sessions,
+            tickets::tickets_list,
+            tickets::tickets_create,
+            tickets::tickets_patch,
+            tickets::tickets_transition,
+            tickets::comments_list,
+            tickets::comments_create,
         ])
         .setup(|app| {
             let _window = app.get_webview_window("main").expect("main window missing");
