@@ -104,11 +104,14 @@ body {
 /* Panes */
 #panes { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 .pane { position: absolute; inset: 0; display: none; }
-.pane.active { display: flex; flex-direction: column; position: relative; }
+.pane.active { display: flex; flex-direction: column; position: relative; min-height: 0; min-width: 0; }
 .pane iframe { flex: 1; width: 100%; border: 0; background: var(--surface); }
 .pane .term-wrap { flex: 1; padding: 8px; background: #ffffff; min-height: 0; min-width: 0; display: flex; }
 .pane .term-wrap .xterm { flex: 1; height: 100%; width: 100%; padding: 0; }
-.pane .term-wrap .xterm .xterm-viewport,
+.pane .term-wrap .xterm .xterm-viewport {
+  width: 100% !important;
+  overflow-y: auto !important;     /* wheel scrolls scrollback */
+}
 .pane .term-wrap .xterm .xterm-screen { width: 100% !important; }
 
 /* Dashboard placeholder when MC backend unconfigured/offline */
