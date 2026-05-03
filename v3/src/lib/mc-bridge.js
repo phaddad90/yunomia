@@ -15,7 +15,7 @@ import { invoke } from '@tauri-apps/api/core';
 // PH-134 — read MC base from localStorage (set by main.js MC_BASE) so the WS
 // URL inherits whatever the dashboard iframe is pointed at. NEVER hardcode 4600.
 function mcWsUrl() {
-  const base = localStorage.getItem('mc.base') || 'http://localhost:4700';
+  const base = localStorage.getItem('mc.base') || 'http://localhost:4600';
   return base.replace(/^http/, 'ws') + '/ws';
 }
 

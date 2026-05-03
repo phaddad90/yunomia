@@ -1,13 +1,13 @@
 :root {
-  --bg: #f5f5f4;
-  --surface: #ffffff;
-  --surface-2: #fafaf9;
-  --border: #e5e5e3;
-  --text-hi: #1a1a1a;
-  --text-mid: #525252;
-  --text-low: #a3a3a3;
-  --pepper: #d93a00;
-  --pepper-soft: #ffe4d6;
+  --bg: #0b0b0c;
+  --surface: #161617;
+  --surface-2: #1f1f21;
+  --border: #2a2a2c;
+  --text-hi: #ededed;
+  --text-mid: #a1a1aa;
+  --text-low: #71717a;
+  --pepper: #ff5722;
+  --pepper-soft: #3a1f17;
   --radius: 6px;
 }
 * { box-sizing: border-box; }
@@ -29,7 +29,13 @@ body {
 .brand-name { font-weight: 700; font-size: 14px; }
 .brand-sub { font-size: 11px; color: var(--text-mid); }
 .logo-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--pepper); display: inline-block; }
-.actions { margin-left: auto; }
+.actions { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.mc-indicator {
+  font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-low);
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius);
+}
+.mc-indicator.online  { color: #4ade80; border-color: #1a3320; }
+.mc-indicator.offline { color: #f87171; border-color: #3a1a1a; }
 
 /* Tabs */
 .tabs { display: flex; gap: 4px; flex: 1; overflow-x: auto; }
@@ -49,16 +55,16 @@ body {
   font-size: 14px; line-height: 1; opacity: 0.5; padding: 0 4px;
   border-radius: 3px;
 }
-.tab-close:hover { opacity: 1; background: rgba(217,58,0,0.15); }
+.tab-close:hover { opacity: 1; background: rgba(255,87,34,0.18); }
 
 /* Buttons */
 .btn-primary, .btn-ghost {
   font: inherit; padding: 4px 12px; font-size: 12px;
   border-radius: var(--radius); cursor: pointer;
-  border: 1px solid var(--border); background: var(--surface); color: var(--text-hi);
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-hi);
 }
 .btn-primary { background: var(--pepper); color: white; border-color: var(--pepper); font-weight: 600; }
-.btn-primary:hover { filter: brightness(1.05); }
+.btn-primary:hover { filter: brightness(1.1); }
 .btn-ghost:hover { background: var(--surface-2); }
 
 /* Panes */
@@ -68,7 +74,7 @@ body {
   display: none;
 }
 .pane.active { display: flex; flex-direction: column; }
-.pane iframe { flex: 1; width: 100%; border: 0; }
+.pane iframe { flex: 1; width: 100%; border: 0; background: var(--surface); }
 .pane .term-wrap {
   flex: 1; padding: 8px; background: #0b0b0c;
 }
@@ -76,24 +82,40 @@ body {
   height: 100%; padding: 4px;
 }
 
+/* Dashboard placeholder when MC backend offline */
+.mc-empty {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 12px; color: var(--text-mid);
+  background: var(--surface);
+}
+.mc-empty h2 { color: var(--text-hi); margin: 0; font-size: 18px; }
+.mc-empty code {
+  background: var(--surface-2); padding: 4px 8px; border-radius: var(--radius);
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  border: 1px solid var(--border); color: var(--pepper);
+}
+.mc-empty .mc-actions { display: flex; gap: 8px; margin-top: 8px; }
+
 /* Modal */
 .modal {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
   display: flex; align-items: center; justify-content: center;
   z-index: 100;
 }
 .modal.hidden { display: none; }
 .modal-card {
-  background: var(--surface); border-radius: 10px; padding: 18px 22px;
+  background: var(--surface); color: var(--text-hi);
+  border: 1px solid var(--border);
+  border-radius: 10px; padding: 18px 22px;
   min-width: 360px; max-width: 480px;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+  box-shadow: 0 16px 50px rgba(0,0,0,0.5);
 }
-.modal-card header h3 { margin: 0 0 14px; font-size: 15px; }
+.modal-card header h3 { margin: 0 0 14px; font-size: 15px; color: var(--text-hi); }
 .modal-card label { display: block; font-size: 11px; color: var(--text-mid); margin: 8px 0 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 .modal-card select, .modal-card input {
   width: 100%; padding: 6px 8px; font: inherit;
   border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--surface);
+  background: var(--surface-2); color: var(--text-hi);
 }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .temp-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; color: var(--text-mid); text-transform: none; letter-spacing: 0; font-weight: 400; }
@@ -101,18 +123,18 @@ body {
 
 /* PH-134 Phase 3 — crash recovery banner */
 .resume-banner {
-  background: #fff8e1; color: #92400e;
-  border-bottom: 1px solid #fcd34d;
+  background: #2a1f00; color: #facc15;
+  border-bottom: 1px solid #44380c;
   padding: 6px 12px; font-size: 12px;
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
 }
 .resume-banner .resume-btn {
   font: inherit; padding: 3px 8px; font-size: 11px;
-  border: 1px solid #fcd34d; border-radius: var(--radius);
-  background: white; color: #92400e; cursor: pointer;
+  border: 1px solid #44380c; border-radius: var(--radius);
+  background: #15110a; color: #facc15; cursor: pointer;
 }
-.resume-banner .resume-btn:hover { background: #fef3c7; }
+.resume-banner .resume-btn:hover { background: #1f1808; }
 .resume-banner .resume-dismiss {
   margin-left: auto; background: transparent; border: 0; cursor: pointer;
-  font-size: 14px; color: #92400e;
+  font-size: 14px; color: #facc15;
 }
