@@ -376,46 +376,47 @@ function deriveStatus(ent) {
   return { state: 'idle', label: 'idle' };
 }
 
-// Render the agent rail in the active dashboard. Same 9 slots, project-scoped.
-const AGENT_RAIL_ORDER = ['LEAD','CEO','SA','AD','WA','DA','QA','WD','TA','PETER'];
+// Render the agent rail. Project-scoped — shows ONLY agents that actually
+// exist for this project (currently running ptys). No phantom 9-slot fleet.
+// New agents arrive via Lead's brief-approval flow OR explicit + Spawn agent.
 function renderAgentRail() {
   const root = document.getElementById('agent-rail');
   if (!root) return;
   const cwd = state.selectedProject;
-  const html = AGENT_RAIL_ORDER.map((code) => {
-    const key = ptyKey(cwd, code);
-    const ent = state.ptys.get(key);
-    const isHuman = code === 'PETER';
-    if (isHuman) {
-      return `<li class="ar-row ar-human" data-code="${code}">
+  const running = visibleAgents();      // [{ key, ent }] for this project
+  const head = `<div class="ar-head">
+    <span>Agents</span>
+    <button id="ar-add" class="ar-add" title="Spawn agent">+</button>
+  </div>`;
+  if (!running.length) {
+    root.innerHTML = `${head}<div class="ar-empty">No agents in this project yet. Click <b>+</b> to spawn one.</div>`;
+  } else {
+    const list = running.map(({ key, ent }) => {
+      const code = ent.code;
+      const { state: stat, label } = deriveStatus(ent);
+      return `<li class="ar-row ar-${stat}" data-code="${code}" data-key="${key}">
         <span class="ar-emoji">${tabEmoji(code)}</span>
         <div class="ar-mid">
           <span class="ar-code">${code}</span>
-          <span class="ar-label"><span class="ar-human-pill">human</span></span>
+          <span class="ar-label">${escapeHtml(label)}</span>
         </div>
+        <span class="ar-dot" data-status="${stat}"></span>
+        <button class="ar-action" data-act="open" title="Open tab">↗</button>
+        <button class="ar-action ar-kill" data-act="kill" title="Kill">✕</button>
       </li>`;
-    }
-    const { state: stat, label } = deriveStatus(ent);
-    const running = !!ent;
-    return `<li class="ar-row ar-${stat}" data-code="${code}" data-key="${key}">
-      <span class="ar-emoji">${tabEmoji(code)}</span>
-      <div class="ar-mid">
-        <span class="ar-code">${code}</span>
-        <span class="ar-label">${escapeHtml(label)}</span>
-      </div>
-      <span class="ar-dot" data-status="${stat}"></span>
-      ${running ? `<button class="ar-action" data-act="open" title="Open tab">↗</button>` : `<button class="ar-action ar-spawn" data-act="spawn" title="Spawn">+</button>`}
-    </li>`;
-  }).join('');
-  root.innerHTML = `<div class="ar-head">Agents</div><ul class="ar-list">${html}</ul>`;
+    }).join('');
+    root.innerHTML = `${head}<ul class="ar-list">${list}</ul>`;
+  }
+  root.querySelector('#ar-add')?.addEventListener('click', () => {
+    document.getElementById('spawn-agent')?.click();
+  });
   root.querySelectorAll('.ar-row').forEach((row) => {
-    const code = row.dataset.code;
-    const key  = row.dataset.key;
+    const key = row.dataset.key;
     row.querySelector('[data-act="open"]')?.addEventListener('click', (e) => { e.stopPropagation(); setActivePane(key); });
-    row.querySelector('[data-act="spawn"]')?.addEventListener('click', (e) => {
+    row.querySelector('[data-act="kill"]')?.addEventListener('click', (e) => {
       e.stopPropagation();
-      const model = state.stickyModels?.[code] || AGENT_MODELS_DEFAULT[code] || 'claude-sonnet-4-6';
-      void spawnAgent(code, model, state.selectedProject);
+      if (!confirm(`Kill ${row.dataset.code}?`)) return;
+      void killPty(key);
     });
   });
 }
