@@ -12,9 +12,11 @@ import '@xterm/xterm/css/xterm.css';
 import { initCompactOrchestrator, noteTaskBoundary, firePreCompact } from './lib/compact-orchestrator.js';
 import { startHeartbeat, noteWakeupSent, noteStdoutFromAgent } from './lib/heartbeat.js';
 import { initKanban, setKanbanProject } from './lib/kanban.js';
+import { loadOnboardingForProject, renderOnboardingView, reopenOnboarding } from './lib/onboarding.js';
 import { writeToAgent } from './lib/mc-bridge.js';
 
 const AGENT_MODELS_DEFAULT = {
+  LEAD:'claude-opus-4-7',
   CEO: 'claude-opus-4-7',
   SA:  'claude-sonnet-4-6',
   AD:  'claude-sonnet-4-6',
@@ -103,7 +105,7 @@ function bindProjectPicker() {
     state.selectedProject = sel.value;
     saveProjects();
     void refreshResumeBanner();
-    void setKanbanProject(state.selectedProject);
+    void window.__renderProjectView?.();
   });
 }
 
@@ -158,7 +160,7 @@ async function submitSpawn() {
     state.selectedProject = cwd;
     saveProjects();
     renderProjectPicker();
-    void setKanbanProject(cwd);
+    void window.__renderProjectView?.();
   }
   const temp = $('#spawn-temp')?.checked || false;
   // PH-134 Phase 3 — concurrency limit guard.
@@ -235,10 +237,11 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   if (opts.temp) state.tempAgents.add(code);
 
   // Spawn the actual claude process. Args:
-  //   --model <model>                 per-agent /model selection (PH-134 Phase 2)
-  //   --permission-mode acceptEdits   tiered-allowlist autonomy (PH-134, internal trust)
+  //   --model <model>                 per-agent /model selection
+  //   --permission-mode acceptEdits   tiered-allowlist autonomy (internal trust)
   //   (project dir is the cwd; claude infers session there)
   // Crash-recovery resume path uses --resume <session_id>; passed via opts.resume.
+  // opts.kickoff = onboarding kickoff prompt — auto-pasted after spawn (Lead path).
   const args = ['--model', model, '--permission-mode', 'acceptEdits'];
   if (opts.resume) args.push('--resume', opts.resume);
   await invoke('pty_spawn', {
@@ -255,6 +258,13 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   // Persist the sticky model so this agent re-spawns with the same one.
   try { await invoke('models_set', { args: { code, model } }); state.stickyModels[code] = model; }
   catch (e) { console.warn('models_set failed', e); }
+  // PH-134 onboarding — auto-paste the lead kickoff after pty boot. Two-second
+  // delay so claude has finished its TUI splash before we shove the prompt in.
+  if (opts.kickoff) {
+    setTimeout(() => {
+      void writeToAgent(code, opts.kickoff + '\n').catch((e) => console.warn('kickoff paste failed', e));
+    }, 2000);
+  }
 }
 
 // PH-134 Phase 2 — wakeup prompt content.
@@ -301,7 +311,7 @@ async function killPty(code) {
 }
 
 function tabEmoji(code) {
-  const e = { CEO:'🎯', SA:'🟧', AD:'🟦', WA:'🟪', DA:'🟨', QA:'🟥', WD:'🌐', TA:'🛠', PETER:'🎩' };
+  const e = { LEAD:'🧭', CEO:'🎯', SA:'🟧', AD:'🟦', WA:'🟪', DA:'🟨', QA:'🟥', WD:'🌐', TA:'🛠', PETER:'🎩' };
   return e[code] || '⬛';
 }
 
@@ -311,11 +321,42 @@ renderProjectPicker();
 bindProjectPicker();
 void refreshResumeBanner();
 
-// Boot the embedded kanban on the dashboard tab.
-initKanban({
-  cwd: state.selectedProject,
-  onWakeup: (payload) => onWakeup(payload),
-});
+// Project view switcher — onboarding (no project, or phase=onboarding) vs
+// active (full kanban). Re-renders on project change + after brief approval.
+async function renderProjectView() {
+  const onbRoot   = document.getElementById('onboarding-root');
+  const activeRoot = document.getElementById('dashboard-active');
+  const cwd = state.selectedProject;
+  if (!cwd) {
+    if (onbRoot)   { onbRoot.hidden = false; onbRoot.innerHTML = `<div class="onb-empty">Pick or add a project (top bar) to begin.</div>`; }
+    if (activeRoot) activeRoot.hidden = true;
+    return;
+  }
+  const { state: projState, brief } = await loadOnboardingForProject(cwd);
+  if (projState.phase !== 'active') {
+    if (activeRoot) activeRoot.hidden = true;
+    if (onbRoot)    onbRoot.hidden = false;
+    renderOnboardingView({
+      container: onbRoot,
+      cwd,
+      state: projState,
+      brief,
+      spawnAgent: (code, model, cwd, opts) => spawnAgent(code, model, cwd, opts),
+      onApproved: () => renderProjectView(),
+    });
+  } else {
+    if (onbRoot)    onbRoot.hidden = true;
+    if (activeRoot) activeRoot.hidden = false;
+    initKanban({
+      cwd,
+      onWakeup: (payload) => onWakeup(payload),
+    });
+  }
+}
+
+// Expose so the project picker triggers re-render too.
+window.__renderProjectView = renderProjectView;
+void renderProjectView();
 
 bindUi();
 

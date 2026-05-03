@@ -31,6 +31,10 @@ pub fn run() {
             tickets::tickets_transition,
             tickets::comments_list,
             tickets::comments_create,
+            tickets::project_state_get,
+            tickets::project_state_set,
+            tickets::brief_get,
+            tickets::brief_write,
         ])
         .setup(|app| {
             let _window = app.get_webview_window("main").expect("main window missing");

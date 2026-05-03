@@ -257,6 +257,105 @@ pub fn comments_create(args: CommentCreateArgs) -> Result<Comment, String> {
     Ok(comment)
 }
 
+// Per-project lifecycle state: onboarding (no tickets yet, lead agent
+// interviewing the user) vs active (brief approved, tickets in flight).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(default)]
+pub struct ProjectState {
+    pub phase: String,                  // "onboarding" | "active"
+    pub project_name: String,
+    pub created_at: String,
+    pub brief_finalised_at: Option<String>,
+    pub lead_spawned_at: Option<String>,
+}
+
+impl Default for ProjectState {
+    fn default() -> Self {
+        Self {
+            phase: "onboarding".into(),
+            project_name: String::new(),
+            created_at: now_iso(),
+            brief_finalised_at: None,
+            lead_spawned_at: None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct StateGetArgs {
+    pub cwd: String,
+}
+
+#[tauri::command]
+pub fn project_state_get(args: StateGetArgs) -> Result<ProjectState, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("state.json");
+    if path.exists() {
+        let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        if !raw.trim().is_empty() {
+            return serde_json::from_str(&raw).map_err(|e| e.to_string());
+        }
+    }
+    Ok(ProjectState::default())
+}
+
+#[derive(Deserialize)]
+pub struct StateSetArgs {
+    pub cwd: String,
+    pub patch: serde_json::Map<String, serde_json::Value>,
+}
+
+#[tauri::command]
+pub fn project_state_set(args: StateSetArgs) -> Result<ProjectState, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("state.json");
+    let mut state: ProjectState = if path.exists() {
+        let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        if raw.trim().is_empty() { ProjectState::default() } else { serde_json::from_str(&raw).map_err(|e| e.to_string())? }
+    } else {
+        ProjectState::default()
+    };
+    for (k, v) in args.patch.iter() {
+        match k.as_str() {
+            "phase"               => if let Some(s) = v.as_str() { state.phase = s.into(); },
+            "project_name"        => if let Some(s) = v.as_str() { state.project_name = s.into(); },
+            "brief_finalised_at"  => state.brief_finalised_at = v.as_str().map(|s| s.to_string()),
+            "lead_spawned_at"     => state.lead_spawned_at = v.as_str().map(|s| s.to_string()),
+            _ => {}
+        }
+    }
+    write_json(&path, &state)?;
+    Ok(state)
+}
+
+// Brief is the canonical scope document. The Lead agent writes here as the
+// onboarding conversation evolves.
+#[derive(Deserialize)]
+pub struct BriefArgs {
+    pub cwd: String,
+}
+
+#[tauri::command]
+pub fn brief_get(args: BriefArgs) -> Result<String, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("brief.md");
+    if !path.exists() { return Ok(String::new()); }
+    fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+pub struct BriefWriteArgs {
+    pub cwd: String,
+    pub markdown: String,
+}
+
+#[tauri::command]
+pub fn brief_write(args: BriefWriteArgs) -> Result<(), String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("brief.md");
+    fs::write(&path, args.markdown).map_err(|e| e.to_string())
+}
+
 fn write_audit(dir: &PathBuf, action: &str, ticket_id: &str, actor: &str, details: serde_json::Value) -> Result<(), String> {
     let path = dir.join("audit.json");
     let mut audit: Vec<AuditEntry> = read_json(&path)?;
