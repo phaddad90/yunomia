@@ -88,22 +88,44 @@ function bindProjectPicker() {
   const sel = $('#project-picker');
   sel.addEventListener('change', () => {
     if (sel.value === ADD_PROJECT_VALUE) {
-      const next = prompt('Project root absolute path:', state.selectedProject || '/Users/peter/Desktop/');
-      if (next && next.trim()) {
-        const path = next.trim().replace(/\/$/, '');
-        if (!state.projects.includes(path)) state.projects.push(path);
-        state.selectedProject = path;
-        saveProjects();
-        renderProjectPicker();
-        void refreshResumeBanner();
-        void setKanbanProject(path);
-      } else {
-        renderProjectPicker();   // restore previous selection
-      }
+      openAddProjectModal();
+      renderProjectPicker();   // restore previous selection visually until modal commits
       return;
     }
     state.selectedProject = sel.value;
     saveProjects();
+    void refreshResumeBanner();
+    void window.__renderProjectView?.();
+  });
+}
+
+function openAddProjectModal() {
+  const modal = $('#project-modal');
+  if (!modal) return;
+  $('#proj-name').value = '';
+  $('#proj-path').value = '';
+  modal.classList.remove('hidden');
+  setTimeout(() => $('#proj-path').focus(), 0);
+}
+function closeAddProjectModal() { $('#project-modal').classList.add('hidden'); }
+function bindAddProjectModal() {
+  $('#proj-cancel').addEventListener('click', closeAddProjectModal);
+  $('#project-modal').addEventListener('click', (e) => { if (e.target.id === 'project-modal') closeAddProjectModal(); });
+  $('#project-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const path = $('#proj-path').value.trim().replace(/\/+$/, '');
+    if (!path) return;
+    if (!path.startsWith('/')) { alert('Use an absolute path (must start with /)'); return; }
+    if (!state.projects.includes(path)) state.projects.push(path);
+    state.selectedProject = path;
+    saveProjects();
+    renderProjectPicker();
+    closeAddProjectModal();
+    // Optional friendly name → write to project_state
+    const name = $('#proj-name').value.trim();
+    if (name) {
+      try { await invoke('project_state_set', { args: { cwd: path, patch: { project_name: name } } }); } catch { /* ignore */ }
+    }
     void refreshResumeBanner();
     void window.__renderProjectView?.();
   });
@@ -361,6 +383,7 @@ function tabEmoji(code) {
 loadProjects();
 renderProjectPicker();
 bindProjectPicker();
+bindAddProjectModal();
 void refreshResumeBanner();
 
 // Status state machine — derived per pty from stdout/write timing + flags.

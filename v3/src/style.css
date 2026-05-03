@@ -160,6 +160,8 @@ body {
   display: grid; grid-template-columns: 240px 1fr 320px; gap: 12px;
   padding: 12px; background: var(--bg);
 }
+.dashboard-layout[hidden] { display: none; }
+.onboarding-root[hidden] { display: none; }
 
 /* Agent rail (left) */
 .agent-rail {
