@@ -13,7 +13,9 @@ import { initCompactOrchestrator, noteTaskBoundary, firePreCompact } from './lib
 import { startHeartbeat, noteWakeupSent, noteStdoutFromAgent } from './lib/heartbeat.js';
 import { initKanban, setKanbanProject } from './lib/kanban.js';
 import { loadOnboardingForProject, renderOnboardingView, reopenOnboarding } from './lib/onboarding.js';
-import { refresh as refreshKanban, getTicketStats } from './lib/kanban.js';
+import { refresh as refreshKanban, getTicketStats, setFilter as setKanbanFilter } from './lib/kanban.js';
+import { renderLessonsView, bindLessonModal } from './lib/lessons.js';
+import { renderActivityView, renderInboxView, renderReportsView, renderAgentsView, unprocessedInboxCount } from './lib/views.js';
 import { writeToAgent } from './lib/mc-bridge.js';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 
@@ -361,7 +363,7 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   // Stream stdout from the pty into xterm.
   const unlistenOut = await listen(`pty://output/${key}`, (evt) => {
     term.write(evt.payload);
-    noteStdoutFromAgent(key);
+    noteStdoutFromAgent(code);
     const ent = state.ptys.get(key);
     if (ent) ent.lastStdoutAt = Date.now();
   });
@@ -458,7 +460,7 @@ async function onWakeup(payload) {
   if (!state.ptys.has(key)) return;
   try {
     await invoke('pty_write', { args: { id: key, data: buildWakeupPrompt(payload) } });
-    noteWakeupSent(key, ticketHumanId, reason);
+    noteWakeupSent(agentCode, ticketHumanId, reason);
     const ent = state.ptys.get(key);
     if (ent) ent.lastWriteAt = Date.now();
     console.info(`[wakeup] ${key} ← ${reason}`);
@@ -580,6 +582,79 @@ setInterval(statusLoopTick, 1000);
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
+
+// Sub-tab switcher inside Dashboard pane.
+function bindSubtabs() {
+  document.querySelectorAll('#subtabs .subtab').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#subtabs .subtab').forEach((x) => x.classList.toggle('active', x === b));
+      const which = b.dataset.sub;
+      document.querySelectorAll('.subview').forEach((v) => v.hidden = v.dataset.view !== which);
+      // Filters bar only shows on Kanban.
+      const filt = document.getElementById('kanban-filters');
+      if (filt) filt.hidden = which !== 'kanban';
+      // Right rail "new ticket" form only on Kanban.
+      const railRight = document.querySelector('.rail-right');
+      if (railRight) railRight.hidden = which !== 'kanban';
+      void renderSubview(which);
+    });
+  });
+}
+async function renderSubview(which) {
+  const cwd = state.selectedProject;
+  if (!cwd) return;
+  if (which === 'kanban')   { /* kanban renders itself via initKanban */ }
+  if (which === 'activity') await renderActivityView(document.getElementById('activity-root'), cwd);
+  if (which === 'inbox')    { await renderInboxView(document.getElementById('inbox-root'), cwd); refreshInboxBadge(); }
+  if (which === 'lessons')  await renderLessonsView(document.getElementById('lessons-root'), cwd);
+  if (which === 'reports')  await renderReportsView(document.getElementById('reports-root'), cwd);
+  if (which === 'agents')   await renderAgentsView(document.getElementById('agents-root'), cwd);
+}
+async function refreshInboxBadge() {
+  const cwd = state.selectedProject;
+  const badge = document.getElementById('sub-badge-inbox');
+  if (!cwd || !badge) return;
+  const n = await unprocessedInboxCount(cwd);
+  if (n > 0) { badge.hidden = false; badge.textContent = String(n); }
+  else { badge.hidden = true; }
+}
+window.__refreshInboxBadge = refreshInboxBadge;
+window.__renderLessons = () => renderSubview('lessons');
+bindSubtabs();
+bindLessonModal(() => state.selectedProject);
+
+// Kanban filter wiring.
+document.getElementById('filter-q')?.addEventListener('input', (e) => setKanbanFilter('q', e.target.value));
+document.getElementById('filter-assignee')?.addEventListener('change', (e) => setKanbanFilter('assignee', e.target.value));
+document.getElementById('filter-type')?.addEventListener('change', (e) => setKanbanFilter('type', e.target.value));
+document.getElementById('filter-due')?.addEventListener('change', (e) => setKanbanFilter('due', e.target.value));
+
+// Schedule poller — every 30s checks schedules_due_now; appends to inbox + osascript.
+async function scheduleTick() {
+  const cwd = state.selectedProject;
+  if (!cwd) return;
+  try {
+    const due = await invoke('schedules_due_now', { args: { cwd } }) || [];
+    for (const d of due) {
+      await invoke('inbox_append', { args: {
+        cwd, kind: 'schedule.due',
+        ticketHumanId: d.ticket_human_id,
+        summary: `${d.ticket_human_id} scheduled time hit — ${d.ticket_title}`,
+      }});
+    }
+    if (due.length) refreshInboxBadge();
+  } catch { /* ignore */ }
+}
+setInterval(scheduleTick, 30_000);
+setTimeout(scheduleTick, 3000);
+
+// Brief auto-refresh poll (only when in onboarding view).
+setInterval(async () => {
+  if (document.getElementById('onboarding-root')?.hidden) return;
+  if (!state.selectedProject) return;
+  // Re-render onboarding (cheap — re-reads brief.md).
+  void renderProjectView();
+}, 3000);
 
 // Project view switcher — onboarding (no project, or phase=onboarding) vs
 // active (full kanban). Re-renders on project change + after brief approval.
@@ -809,9 +884,9 @@ startMcBridge({
   },
 });
 
-// PH-134 Phase 3 — heartbeat (L0 mechanical + L1 hourly CEO).
+// Heartbeat — per-agent. Agents with wakeup_mode=heartbeat fire on cron.
 startHeartbeat({
-  getRunningAgents: () => Array.from(state.ptys.keys()),
+  getRunningAgents: () => visibleAgents().map(({ ent }) => ent.code),
   rewakeAgent: (code, ticketHumanId, reason) => onWakeup({ agentCode: code, ticketHumanId, reason }),
 });
 

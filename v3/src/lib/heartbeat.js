@@ -1,4 +1,11 @@
-// Yunomia — two-layer heartbeat.
+// Yunomia — per-agent heartbeat config.
+//
+// Each agent in the project's roster has wakeup_mode = "heartbeat" or
+// "on-assignment". Heartbeat agents fire a scheduled wake every
+// heartbeat_min minutes if their pty is alive. on-assignment agents only
+// wake when a ticket lands on them via mc-bridge.
+//
+// Layer 0 mechanical safety-net (zero-LLM) still runs alongside.
 //
 // Layer 0 — mechanical safety-net (zero LLM tokens). Every 30s, walks each
 // running pty: if we wrote a wakeup AT_T and the pty produced no stdout in
@@ -13,7 +20,7 @@ import { writeToAgent } from './mc-bridge.js';
 
 const LAYER0_INTERVAL_MS = 30_000;
 const LAYER0_STALL_MS    = 5 * 60_000;
-const LAYER1_INTERVAL_MS = 60 * 60_000;
+const LAYER1_INTERVAL_MS = 60_000;     // tick every minute; per-agent cadence honoured inside
 
 // agentCode → { lastWakeupAt: epoch_ms, lastStdoutAt: epoch_ms, ticketHumanId, reason }
 const wakeups = new Map();
@@ -61,17 +68,29 @@ function layer0Tick({ getRunningAgents, rewakeAgent }) {
   }
 }
 
+// Per-agent scheduler — only fires for agents whose project_agents.json
+// entry has wakeup_mode = "heartbeat". Reads the project agents list every
+// minute, schedules a wake for each at heartbeat_min cadence.
+import { invoke } from '@tauri-apps/api/core';
+const lastFiredAt = new Map();   // `${cwd}|${code}` → epoch ms
 async function layer1Tick({ getRunningAgents }) {
-  const running = getRunningAgents();
-  if (!running.includes('CEO')) {
-    console.info('[heartbeat-L1] CEO not running — skipping');
-    return;
-  }
-  const prompt = `\n\n[Yunomia heartbeat L1 — ${new Date().toISOString()}] Sweep the fleet: any agent assigned but not making progress? Any scheduled-for tickets due now? Any stuck verdicts in_review? If yes, nudge or reassign. If clear, reply OK and go back to sleep.\n`;
-  try {
-    await writeToAgent('CEO', prompt);
-    console.info('[heartbeat-L1] sent to CEO');
-  } catch (err) {
-    console.warn('[heartbeat-L1] write failed', err);
+  const cwd = window.yunomia?.state?.selectedProject;
+  if (!cwd) return;
+  let agents = [];
+  try { agents = await invoke('project_agents_list', { args: { cwd } }) || []; } catch { return; }
+  const heartbeatAgents = agents.filter((a) => a.wakeup_mode === 'heartbeat');
+  if (!heartbeatAgents.length) return;
+  const running = new Set(getRunningAgents());
+  const now = Date.now();
+  for (const a of heartbeatAgents) {
+    if (!running.has(a.code)) continue;
+    const key = `${cwd}|${a.code}`;
+    const last = lastFiredAt.get(key) || 0;
+    const intervalMs = Math.max(5, a.heartbeat_min || 60) * 60_000;
+    if (now - last < intervalMs) continue;
+    lastFiredAt.set(key, now);
+    const prompt = `\n\n[Yunomia heartbeat — ${a.code} — ${new Date().toISOString()}] Periodic check. Anything you should be doing? If queue empty, reply OK and go back to sleep.\n`;
+    try { await writeToAgent(a.code, prompt); console.info(`[heartbeat] ${a.code} fired`); }
+    catch (err) { console.warn(`[heartbeat] write failed for ${a.code}`, err); }
   }
 }

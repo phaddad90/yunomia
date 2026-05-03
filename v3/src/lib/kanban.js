@@ -6,6 +6,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { noteTaskBoundary } from './compact-orchestrator.js';
+import { openLessonModal } from './lessons.js';
 
 const COLUMNS = [
   { id: 'backlog',     label: 'Backlog' },
@@ -24,7 +25,10 @@ const k = {
   tickets: [],
   selected: null,         // selected ticket id
   comments: [],
+  schedules: {},          // ticket_id → schedule entry
+  filters: { q: '', assignee: '', type: '', due: '' },
   onWakeup: null,         // callback fired when a transition routes work to a running pty
+  onTicketCreate: null,   // optional hook for ticket creation
 };
 
 // Public API
@@ -63,7 +67,39 @@ export async function refresh() {
     console.warn('tickets_list', err);
     k.tickets = [];
   }
+  try {
+    const schedList = await invoke('schedules_list', { args: { cwd: k.cwd } }) || [];
+    k.schedules = {};
+    for (const s of schedList) k.schedules[s.ticket_id] = s;
+  } catch { k.schedules = {}; }
   render();
+}
+
+export function setFilter(key, val) {
+  k.filters[key] = val;
+  render();
+}
+
+function ticketMatchesFilters(t) {
+  const f = k.filters;
+  if (f.q) {
+    const hay = `${t.title} ${t.body_md || ''} ${t.human_id}`.toLowerCase();
+    if (!hay.includes(f.q.toLowerCase())) return false;
+  }
+  if (f.assignee && t.assignee_agent !== f.assignee) return false;
+  if (f.type && t.type !== f.type) return false;
+  if (f.due) {
+    const sched = k.schedules?.[t.id];
+    if (!sched) return false;
+    const when = new Date(sched.scheduled_for).getTime();
+    const now  = Date.now();
+    const endOfToday = (() => { const d = new Date(); d.setHours(23,59,59,999); return d.getTime(); })();
+    const endOfWeek = (() => { const d = new Date(); const day = d.getDay(); d.setDate(d.getDate() + ((7 - day) % 7)); d.setHours(23,59,59,999); return d.getTime(); })();
+    if (f.due === 'overdue' && when > now) return false;
+    if (f.due === 'today' && when > endOfToday) return false;
+    if (f.due === 'week' && when > endOfWeek) return false;
+  }
+  return true;
 }
 
 // Internal
@@ -82,8 +118,9 @@ function render() {
       <div class="k-empty-sub">Lead's proposed tickets land here after you approve, or use the form on the right to file one manually.</div>`);
     return;
   }
+  const filtered = k.tickets.filter(ticketMatchesFilters);
   const cols = COLUMNS.map((c) => {
-    const cards = k.tickets.filter((t) => t.status === c.id);
+    const cards = filtered.filter((t) => t.status === c.id);
     return `
       <div class="k-col" data-col="${c.id}">
         <div class="k-col-head"><span>${c.label}</span><span class="k-count">${cards.length}</span></div>
@@ -103,6 +140,8 @@ function renderEmpty(msg) {
 
 function renderCard(t) {
   const ag = t.assignee_agent ? `${AGENT_EMOJI[t.assignee_agent] || ''} ${escapeHtml(t.assignee_agent)}` : '<span class="k-unassigned">unassigned</span>';
+  const sched = k.schedules?.[t.id];
+  const schedBadge = sched ? scheduleBadgeHtml(sched) : '';
   return `
     <div class="k-card" data-id="${escapeHtml(t.id)}">
       <div class="k-card-head">
@@ -113,9 +152,32 @@ function renderCard(t) {
       <div class="k-card-foot">
         <span class="k-pill k-pill-${t.audience}">${escapeHtml(t.audience)}</span>
         <span class="k-pill k-pill-${t.type}">${escapeHtml(t.type)}</span>
+        ${schedBadge}
       </div>
     </div>
   `;
+}
+
+function scheduleBadgeHtml(s) {
+  const when = new Date(s.scheduled_for);
+  const overdue = when.getTime() <= Date.now();
+  const cls = overdue ? 'sched-badge overdue' : 'sched-badge';
+  return `<span class="${cls}" title="Scheduled ${escapeHtml(s.scheduled_for)}">🔔 ${formatRel(when)}</span>`;
+}
+function formatRel(when) {
+  const ms = when.getTime() - Date.now();
+  const abs = Math.abs(ms);
+  const m = Math.round(abs/60000), h = Math.round(abs/3600000), d = Math.round(abs/86400000);
+  if (ms <= 0) return m < 60 ? `${m}m overdue` : h < 48 ? `${h}h overdue` : `${d}d overdue`;
+  return m < 60 ? `in ${m}m` : h < 48 ? `in ${h}h` : `in ${d}d`;
+}
+
+function toLocalDt(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function projectLabel(p) {
@@ -168,6 +230,12 @@ function renderSide(t) {
         <pre id="k-side-bodypre">${escapeHtml(t.body_md)}</pre>
         <button class="btn-ghost k-side-bodyedit" id="k-side-bodyedit" type="button" title="Edit body">✏</button>
       </div>
+      <h4>Scheduled for</h4>
+      <div class="k-side-sched">
+        <input type="datetime-local" id="k-side-sched-input" value="${k.schedules?.[t.id] ? toLocalDt(k.schedules[t.id].scheduled_for) : ''}" />
+        <button class="btn-secondary" id="k-side-sched-save" type="button">Save</button>
+        <button class="btn-ghost" id="k-side-sched-clear" type="button" ${k.schedules?.[t.id] ? '' : 'disabled'}>Clear</button>
+      </div>
       <h4>Comments (${k.comments.length})</h4>
       <div class="k-comments">${commentsHtml || '<div class="k-comments-empty">No comments yet.</div>'}</div>
       <form id="k-comment-form" class="k-comment-form">
@@ -193,10 +261,41 @@ function renderSide(t) {
   $('#k-side-bodyedit').addEventListener('click', () => editBodyInline(t));
   $('#k-side-start').addEventListener('click', () => transition(t.id, 'start'));
   $('#k-side-handoff').addEventListener('click', () => transition(t.id, 'handoff'));
-  $('#k-side-done').addEventListener('click', () => {
+  $('#k-side-done').addEventListener('click', async () => {
     if (!confirm(`Mark ${t.human_id} as done?`)) return;
-    transition(t.id, 'done');
+    const res = await transition(t.id, 'done');
+    // Bug-close hook: if this was a bug ticket, prompt to capture a Lesson.
+    if (res && res.type === 'bug') {
+      setTimeout(() => {
+        if (confirm(`${res.human_id} closed. Capture a Bug Lesson?`)) {
+          openLessonModal({ ticket: res });
+        }
+      }, 200);
+    }
   });
+  // Schedule picker
+  const schedInput = $('#k-side-sched-input');
+  const schedSave  = $('#k-side-sched-save');
+  const schedClear = $('#k-side-sched-clear');
+  if (schedInput && schedSave && schedClear) {
+    schedSave.addEventListener('click', async () => {
+      const v = schedInput.value;
+      if (!v) return;
+      const when = new Date(v);
+      try {
+        await invoke('schedules_set', { args: { cwd: k.cwd, ticketId: t.id, scheduledFor: when.toISOString(), setBy: 'PETER' } });
+        await refresh();
+        if (k.selected === t.id) await openTicket(t.id);
+      } catch (err) { alert('Schedule failed: ' + (err?.message || err)); }
+    });
+    schedClear.addEventListener('click', async () => {
+      try {
+        await invoke('schedules_clear', { args: { cwd: k.cwd, ticketId: t.id } });
+        await refresh();
+        if (k.selected === t.id) await openTicket(t.id);
+      } catch (err) { alert('Clear failed: ' + (err?.message || err)); }
+    });
+  }
   $('#k-comment-form').addEventListener('submit', (e) => { e.preventDefault(); submitComment(t.id); });
 }
 
@@ -219,14 +318,15 @@ async function transition(id, action) {
     if (k.onWakeup && updated.assignee_agent && updated.status === 'in_progress') {
       k.onWakeup({ agentCode: updated.assignee_agent, ticketHumanId: updated.human_id, reason: action });
     }
-    // Task-boundary trigger for auto-compact (any /start /handoff /done is a boundary).
     if (updated.assignee_agent) {
       noteTaskBoundary({ agentCode: updated.assignee_agent, kind: 'ticket-transition', ticketHumanId: updated.human_id });
     }
     await refresh();
     if (k.selected === id) await openTicket(id);
+    return updated;
   } catch (err) {
     alert(action + ' failed: ' + (err?.message || err));
+    return null;
   }
 }
 

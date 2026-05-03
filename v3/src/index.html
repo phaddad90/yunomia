@@ -37,7 +37,42 @@
             <pre id="brief-content"></pre>
             <button id="brief-reopen" class="btn-ghost" type="button">Re-open onboarding</button>
           </details>
-          <div id="kanban-root" class="kanban-root"></div>
+          <nav class="subtabs" id="subtabs">
+            <button class="subtab active" data-sub="kanban">Kanban</button>
+            <button class="subtab" data-sub="activity">Activity</button>
+            <button class="subtab" data-sub="inbox">Inbox <span class="subtab-badge" id="sub-badge-inbox" hidden>0</span></button>
+            <button class="subtab" data-sub="lessons">Lessons</button>
+            <button class="subtab" data-sub="reports">Reports</button>
+            <button class="subtab" data-sub="agents">Agents</button>
+          </nav>
+          <div id="kanban-filters" class="kanban-filters">
+            <input id="filter-q" type="text" placeholder="Search title / body…" />
+            <select id="filter-assignee">
+              <option value="">All assignees</option>
+            </select>
+            <select id="filter-type">
+              <option value="">All types</option>
+              <option value="bug">bug</option>
+              <option value="feature">feature</option>
+              <option value="doc">doc</option>
+              <option value="ops">ops</option>
+              <option value="migration">migration</option>
+              <option value="gate">gate</option>
+            </select>
+            <select id="filter-due">
+              <option value="">All</option>
+              <option value="overdue">Overdue</option>
+              <option value="today">Due today</option>
+              <option value="week">Due this week</option>
+              <option value="scheduled">Any scheduled</option>
+            </select>
+          </div>
+          <div id="kanban-root" class="kanban-root subview" data-view="kanban"></div>
+          <div id="activity-root" class="subview" data-view="activity" hidden></div>
+          <div id="inbox-root" class="subview" data-view="inbox" hidden></div>
+          <div id="lessons-root" class="subview" data-view="lessons" hidden></div>
+          <div id="reports-root" class="subview" data-view="reports" hidden></div>
+          <div id="agents-root" class="subview" data-view="agents" hidden></div>
         </div>
         <div class="resizer" data-resize="right"></div>
         <aside class="rail-right">
@@ -78,6 +113,42 @@
       <aside id="k-side" class="k-side hidden"></aside>
     </section>
   </main>
+
+  <!-- Lesson capture modal -->
+  <div id="lesson-modal" class="modal hidden">
+    <div class="modal-card lesson-card">
+      <header><h3 id="lesson-modal-title">Capture Bug Lesson</h3></header>
+      <form id="lesson-form">
+        <label>Symptom <span class="hint">one sentence</span></label>
+        <input id="lesson-symptom" type="text" required maxlength="280" />
+        <label>Severity</label>
+        <select id="lesson-severity">
+          <option value="medium" selected>medium</option>
+          <option value="low">low</option>
+          <option value="high">high</option>
+          <option value="critical">critical</option>
+        </select>
+        <label>Linked ticket</label>
+        <input id="lesson-ticket" type="text" placeholder="(auto-filled)" />
+        <label>Root cause</label>
+        <textarea id="lesson-root" rows="3"></textarea>
+        <label>Fix</label>
+        <textarea id="lesson-fix" rows="3"></textarea>
+        <label>Files changed <span class="hint">comma-separated</span></label>
+        <textarea id="lesson-files" rows="2"></textarea>
+        <label>How to recognise this pattern next time</label>
+        <textarea id="lesson-recognise" rows="2"></textarea>
+        <label>Prevent action</label>
+        <textarea id="lesson-prevent" rows="2"></textarea>
+        <label>Tags <span class="hint">comma-separated</span></label>
+        <input id="lesson-tags" type="text" />
+        <div class="modal-actions">
+          <button type="button" id="lesson-cancel" class="btn-ghost">Cancel</button>
+          <button type="submit" class="btn-primary">Capture</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <!-- Settings modal -->
   <div id="settings-modal" class="modal hidden">

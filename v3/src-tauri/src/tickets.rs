@@ -356,6 +356,540 @@ pub fn brief_write(args: BriefWriteArgs) -> Result<(), String> {
     fs::write(&path, args.markdown).map_err(|e| e.to_string())
 }
 
+// Schedules — per-ticket scheduled_for.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Schedule {
+    pub ticket_id: String,
+    pub ticket_human_id: String,
+    pub ticket_title: String,
+    pub scheduled_for: String,
+    pub set_by: String,
+    pub set_at: String,
+    pub fired: bool,
+}
+#[derive(Deserialize)]
+pub struct SchedulesListArgs { pub cwd: String }
+#[tauri::command]
+pub fn schedules_list(args: SchedulesListArgs) -> Result<Vec<Schedule>, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    Ok(read_json(&dir.join("schedules.json"))?)
+}
+#[derive(Deserialize)]
+pub struct ScheduleSetArgs {
+    pub cwd: String, pub ticket_id: String,
+    pub scheduled_for: String, pub set_by: Option<String>,
+}
+#[tauri::command]
+pub fn schedules_set(args: ScheduleSetArgs) -> Result<Schedule, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("schedules.json");
+    let mut list: Vec<Schedule> = read_json(&path)?;
+    list.retain(|s| s.ticket_id != args.ticket_id);
+    // Look up ticket to capture title + human_id snapshot.
+    let tickets: Vec<Ticket> = read_json(&dir.join("tickets.json"))?;
+    let t = tickets.iter().find(|t| t.id == args.ticket_id);
+    let entry = Schedule {
+        ticket_id: args.ticket_id,
+        ticket_human_id: t.map(|x| x.human_id.clone()).unwrap_or_default(),
+        ticket_title: t.map(|x| x.title.clone()).unwrap_or_default(),
+        scheduled_for: args.scheduled_for,
+        set_by: args.set_by.unwrap_or_else(|| "user".into()),
+        set_at: now_iso(),
+        fired: false,
+    };
+    list.push(entry.clone());
+    write_json(&path, &list)?;
+    Ok(entry)
+}
+#[derive(Deserialize)]
+pub struct ScheduleClearArgs { pub cwd: String, pub ticket_id: String }
+#[tauri::command]
+pub fn schedules_clear(args: ScheduleClearArgs) -> Result<(), String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("schedules.json");
+    let mut list: Vec<Schedule> = read_json(&path)?;
+    list.retain(|s| s.ticket_id != args.ticket_id);
+    write_json(&path, &list)
+}
+#[tauri::command]
+pub fn schedules_due_now(args: SchedulesListArgs) -> Result<Vec<Schedule>, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("schedules.json");
+    let mut list: Vec<Schedule> = read_json(&path)?;
+    let now = chrono::Utc::now();
+    let mut due = Vec::new();
+    let mut changed = false;
+    for s in list.iter_mut() {
+        if s.fired { continue; }
+        if let Ok(when) = chrono::DateTime::parse_from_rfc3339(&s.scheduled_for) {
+            if when.with_timezone(&chrono::Utc) <= now { s.fired = true; due.push(s.clone()); changed = true; }
+        }
+    }
+    if changed { write_json(&path, &list)?; }
+    Ok(due)
+}
+
+// Activity feed — read audit.json (newest first).
+#[derive(Deserialize)]
+pub struct AuditListArgs { pub cwd: String, pub limit: Option<usize> }
+#[tauri::command]
+pub fn audit_list(args: AuditListArgs) -> Result<Vec<AuditEntry>, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("audit.json");
+    let mut list: Vec<AuditEntry> = read_json(&path)?;
+    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    if let Some(n) = args.limit { list.truncate(n); }
+    Ok(list)
+}
+
+// Per-project inbox — events the user wants surfaced (e.g. ticket assigned to
+// them, comments on their tickets, scheduled-due hits). Append-only JSONL.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct InboxEntry {
+    pub id: String,
+    pub created_at: String,
+    pub kind: String,                    // ticket.assigned | comment.added | schedule.due | bug.closed
+    pub ticket_human_id: Option<String>,
+    pub summary: String,
+    pub processed: bool,
+}
+#[derive(Deserialize)]
+pub struct InboxAppendArgs {
+    pub cwd: String, pub kind: String, pub ticket_human_id: Option<String>, pub summary: String,
+}
+#[tauri::command]
+pub fn inbox_append(args: InboxAppendArgs) -> Result<InboxEntry, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("inbox.json");
+    let mut list: Vec<InboxEntry> = read_json(&path)?;
+    let entry = InboxEntry {
+        id: new_uuid(), created_at: now_iso(),
+        kind: args.kind, ticket_human_id: args.ticket_human_id, summary: args.summary,
+        processed: false,
+    };
+    list.push(entry.clone());
+    write_json(&path, &list)?;
+    Ok(entry)
+}
+#[derive(Deserialize)]
+pub struct InboxListArgs { pub cwd: String }
+#[tauri::command]
+pub fn inbox_list(args: InboxListArgs) -> Result<Vec<InboxEntry>, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let mut list: Vec<InboxEntry> = read_json(&dir.join("inbox.json"))?;
+    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(list)
+}
+#[derive(Deserialize)]
+pub struct InboxMarkArgs { pub cwd: String, pub id: String }
+#[tauri::command]
+pub fn inbox_mark_processed(args: InboxMarkArgs) -> Result<(), String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("inbox.json");
+    let mut list: Vec<InboxEntry> = read_json(&path)?;
+    for e in list.iter_mut() { if e.id == args.id { e.processed = true; } }
+    write_json(&path, &list)
+}
+#[derive(Deserialize)]
+pub struct InboxMarkAllArgs { pub cwd: String }
+#[tauri::command]
+pub fn inbox_mark_all(args: InboxMarkAllArgs) -> Result<u32, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("inbox.json");
+    let mut list: Vec<InboxEntry> = read_json(&path)?;
+    let mut n = 0;
+    for e in list.iter_mut() { if !e.processed { e.processed = true; n += 1; } }
+    write_json(&path, &list)?;
+    Ok(n)
+}
+
+// Per-agent files — kickoff / goals / soul. Stored under agents/<CODE>/{file}.
+#[derive(Deserialize)]
+pub struct AgentFileArgs { pub cwd: String, pub code: String, pub kind: String }     // kind: kickoff | goals | soul
+#[tauri::command]
+pub fn agent_file_get(args: AgentFileArgs) -> Result<String, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("agents").join(&args.code).join(format!("{}.md", args.kind));
+    if !path.exists() { return Ok(String::new()); }
+    fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+#[derive(Deserialize)]
+pub struct AgentFileWriteArgs { pub cwd: String, pub code: String, pub kind: String, pub markdown: String }
+#[tauri::command]
+pub fn agent_file_write(args: AgentFileWriteArgs) -> Result<(), String> {
+    let dir = ensure_project_dir(&args.cwd)?.join("agents").join(&args.code);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join(format!("{}.md", args.kind)), args.markdown).map_err(|e| e.to_string())
+}
+
+// Project agents roster — list of {code, model, wakeup_mode, heartbeat_min}.
+// Persisted at agents.json. Source of truth for who's "in" this project.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ProjectAgent {
+    pub code: String,
+    pub model: String,
+    pub wakeup_mode: String,           // "heartbeat" | "on-assignment"
+    pub heartbeat_min: u32,            // ignored unless mode=heartbeat
+    pub note: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct AgentsListArgs { pub cwd: String }
+#[tauri::command]
+pub fn project_agents_list(args: AgentsListArgs) -> Result<Vec<ProjectAgent>, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    Ok(read_json(&dir.join("agents.json"))?)
+}
+#[derive(Deserialize)]
+pub struct AgentsUpsertArgs { pub cwd: String, pub agents: Vec<ProjectAgent> }
+#[tauri::command]
+pub fn project_agents_upsert(args: AgentsUpsertArgs) -> Result<Vec<ProjectAgent>, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("agents.json");
+    let mut existing: Vec<ProjectAgent> = read_json(&path)?;
+    for a in args.agents.into_iter() {
+        if let Some(slot) = existing.iter_mut().find(|x| x.code == a.code) {
+            *slot = a;
+        } else {
+            existing.push(a);
+        }
+    }
+    write_json(&path, &existing)?;
+    Ok(existing)
+}
+#[derive(Deserialize)]
+pub struct AgentsRemoveArgs { pub cwd: String, pub code: String }
+#[tauri::command]
+pub fn project_agents_remove(args: AgentsRemoveArgs) -> Result<(), String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("agents.json");
+    let mut list: Vec<ProjectAgent> = read_json(&path)?;
+    list.retain(|a| a.code != args.code);
+    write_json(&path, &list)
+}
+
+// Reports — daily summary.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ReportsSummary {
+    pub open: u32,
+    pub in_progress: u32,
+    pub in_review: u32,
+    pub done_today: u32,
+    pub by_agent: std::collections::HashMap<String, u32>,
+}
+#[derive(Deserialize)]
+pub struct ReportsArgs { pub cwd: String }
+#[tauri::command]
+pub fn reports_summary(args: ReportsArgs) -> Result<ReportsSummary, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let tickets: Vec<Ticket> = read_json(&dir.join("tickets.json"))?;
+    let mut summary = ReportsSummary::default();
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    for t in &tickets {
+        match t.status.as_str() {
+            "in_progress" => summary.in_progress += 1,
+            "in_review" => summary.in_review += 1,
+            "done" => {
+                if t.updated_at.starts_with(&today) { summary.done_today += 1; }
+            }
+            "released" => {}
+            _ => summary.open += 1,
+        }
+        if let Some(a) = &t.assignee_agent {
+            if t.status != "done" && t.status != "released" {
+                *summary.by_agent.entry(a.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(summary)
+}
+impl Default for ReportsSummary {
+    fn default() -> Self {
+        Self { open: 0, in_progress: 0, in_review: 0, done_today: 0, by_agent: std::collections::HashMap::new() }
+    }
+}
+
+// Compliance — minimal: per-ticket eligible-actions + global kill-switch.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct EligibleActions {
+    pub can_start: bool,    pub start_reason: Option<String>,
+    pub can_handoff: bool,  pub handoff_reason: Option<String>,
+    pub can_done: bool,     pub done_reason: Option<String>,
+    pub compliance_disabled: bool,
+}
+#[derive(Deserialize)]
+pub struct EligibleArgs { pub cwd: String, pub id: String }
+#[tauri::command]
+pub fn eligible_actions(args: EligibleArgs) -> Result<EligibleActions, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let kill = read_kill_switch(&dir);
+    let tickets: Vec<Ticket> = read_json(&dir.join("tickets.json"))?;
+    let t = tickets.iter().find(|x| x.id == args.id).ok_or_else(|| "not found".to_string())?;
+    let comments: Vec<Comment> = read_json(&dir.join("comments.json"))?;
+    let lessons: Vec<Lesson> = read_json(&dir.join("lessons.json"))?;
+    let mut e = EligibleActions {
+        can_start: true, start_reason: None,
+        can_handoff: true, handoff_reason: None,
+        can_done: true, done_reason: None,
+        compliance_disabled: kill,
+    };
+    if kill { return Ok(e); }
+    // Single-task focus: agent assigned to this ticket can't /start if they
+    // already have another in_progress ticket in this project.
+    if t.status == "assigned" {
+        if let Some(a) = &t.assignee_agent {
+            let count = tickets.iter().filter(|x| x.id != t.id && x.status == "in_progress" && x.assignee_agent.as_deref() == Some(a.as_str())).count();
+            if count > 0 {
+                e.can_start = false;
+                e.start_reason = Some(format!("Agent {} already has {} in_progress ticket{}.", a, count, if count==1 {""} else {"s"}));
+            }
+        }
+    }
+    // Bug close requires a Bug Lesson cited.
+    if t.r#type == "bug" && t.status == "in_review" {
+        let cited = lessons.iter().any(|l| l.ticket_id.as_deref() == Some(t.id.as_str()));
+        if !cited {
+            e.can_done = false;
+            e.done_reason = Some("Bug ticket can't /done without a Bug Lesson — capture one first.".into());
+        }
+    }
+    // Pretend-QA gate: bugs need a verdict comment matching ## QA — PASS.
+    if t.r#type == "bug" && t.status == "in_review" && e.can_done {
+        let qa_passed = comments.iter().any(|c| c.ticket_id == t.id && c.body_md.contains("## QA — ") && c.body_md.contains("PASS"));
+        if !qa_passed {
+            e.can_done = false;
+            e.done_reason = Some("Bug ticket needs a `## QA — … — PASS` verdict comment.".into());
+        }
+    }
+    Ok(e)
+}
+
+// Kill-switch: file-backed, reads each call (cheap).
+fn kill_switch_path(dir: &PathBuf) -> PathBuf { dir.join("kill-switch.json") }
+fn read_kill_switch(dir: &PathBuf) -> bool {
+    let p = kill_switch_path(dir);
+    if !p.exists() { return false; }
+    if let Ok(raw) = fs::read_to_string(&p) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            return v.get("disabled").and_then(|x| x.as_bool()).unwrap_or(false);
+        }
+    }
+    false
+}
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct KillSwitch {
+    pub disabled: bool,
+    pub disabled_at: Option<String>,
+    pub disabled_by: Option<String>,
+    pub reason: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct KillSwitchGetArgs { pub cwd: String }
+#[tauri::command]
+pub fn kill_switch_get(args: KillSwitchGetArgs) -> Result<KillSwitch, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let p = kill_switch_path(&dir);
+    if !p.exists() { return Ok(KillSwitch::default()); }
+    let raw = fs::read_to_string(&p).map_err(|e| e.to_string())?;
+    serde_json::from_str(&raw).map_err(|e| e.to_string())
+}
+#[derive(Deserialize)]
+pub struct KillSwitchSetArgs { pub cwd: String, pub disabled: bool, pub by: Option<String>, pub reason: Option<String> }
+#[tauri::command]
+pub fn kill_switch_set(args: KillSwitchSetArgs) -> Result<KillSwitch, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let ks = KillSwitch {
+        disabled: args.disabled,
+        disabled_at: if args.disabled { Some(now_iso()) } else { None },
+        disabled_by: args.by,
+        reason: args.reason,
+    };
+    fs::write(kill_switch_path(&dir), serde_json::to_string_pretty(&ks).unwrap()).map_err(|e| e.to_string())?;
+    Ok(ks)
+}
+
+// Bug Lessons — file-backed per-project at lessons.json. Schema mirrors
+// MC v0.3's lesson contract (symptom / root cause / fix / files / recognise /
+// prevent + tags + severity).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Lesson {
+    pub id: String,
+    pub human_id: String,            // e.g. BL-001
+    pub ticket_id: Option<String>,
+    pub ticket_human_id: Option<String>,
+    pub symptom: String,
+    pub severity: String,            // low | medium | high | critical
+    pub root_cause: String,
+    pub fix: String,
+    pub files_changed: String,
+    pub recognise_pattern: String,
+    pub prevent_action: String,
+    pub tags: Vec<String>,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Deserialize)]
+pub struct LessonsListArgs { pub cwd: String }
+
+#[tauri::command]
+pub fn lessons_list(args: LessonsListArgs) -> Result<Vec<Lesson>, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("lessons.json");
+    let lessons: Vec<Lesson> = read_json(&path)?;
+    Ok(lessons)
+}
+
+#[derive(Deserialize)]
+pub struct LessonCreateArgs {
+    pub cwd: String,
+    pub symptom: String,
+    pub severity: Option<String>,
+    pub ticket_id: Option<String>,
+    pub ticket_human_id: Option<String>,
+    pub root_cause: Option<String>,
+    pub fix: Option<String>,
+    pub files_changed: Option<String>,
+    pub recognise_pattern: Option<String>,
+    pub prevent_action: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub created_by: Option<String>,
+}
+
+#[tauri::command]
+pub fn lessons_create(args: LessonCreateArgs) -> Result<Lesson, String> {
+    if args.symptom.trim().is_empty() { return Err("symptom required".into()); }
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("lessons.json");
+    let mut lessons: Vec<Lesson> = read_json(&path)?;
+    let counter_path = dir.join("lessons-counter.txt");
+    let next = fs::read_to_string(&counter_path).ok().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0) + 1;
+    let _ = fs::write(&counter_path, next.to_string());
+    let now = now_iso();
+    let lesson = Lesson {
+        id: new_uuid(),
+        human_id: format!("BL-{:03}", next),
+        ticket_id: args.ticket_id,
+        ticket_human_id: args.ticket_human_id,
+        symptom: args.symptom,
+        severity: args.severity.unwrap_or_else(|| "medium".into()),
+        root_cause: args.root_cause.unwrap_or_default(),
+        fix: args.fix.unwrap_or_default(),
+        files_changed: args.files_changed.unwrap_or_default(),
+        recognise_pattern: args.recognise_pattern.unwrap_or_default(),
+        prevent_action: args.prevent_action.unwrap_or_default(),
+        tags: args.tags.unwrap_or_default(),
+        created_by: args.created_by.unwrap_or_else(|| "user".into()),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    lessons.push(lesson.clone());
+    write_json(&path, &lessons)?;
+    write_audit(&dir, "lesson.created", lesson.ticket_id.as_deref().unwrap_or(""), &lesson.created_by,
+                serde_json::json!({ "lesson_id": lesson.id, "human_id": lesson.human_id }))?;
+    Ok(lesson)
+}
+
+#[derive(Deserialize)]
+pub struct LessonPatchArgs {
+    pub cwd: String,
+    pub id: String,
+    pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+#[tauri::command]
+pub fn lessons_patch(args: LessonPatchArgs) -> Result<Lesson, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("lessons.json");
+    let mut lessons: Vec<Lesson> = read_json(&path)?;
+    let idx = lessons.iter().position(|l| l.id == args.id).ok_or_else(|| "lesson not found".to_string())?;
+    let mut l = lessons[idx].clone();
+    for (k, v) in args.fields.iter() {
+        match k.as_str() {
+            "symptom"          => if let Some(s) = v.as_str() { l.symptom = s.into(); },
+            "severity"         => if let Some(s) = v.as_str() { l.severity = s.into(); },
+            "root_cause"       => if let Some(s) = v.as_str() { l.root_cause = s.into(); },
+            "fix"              => if let Some(s) = v.as_str() { l.fix = s.into(); },
+            "files_changed"    => if let Some(s) = v.as_str() { l.files_changed = s.into(); },
+            "recognise_pattern"=> if let Some(s) = v.as_str() { l.recognise_pattern = s.into(); },
+            "prevent_action"   => if let Some(s) = v.as_str() { l.prevent_action = s.into(); },
+            "tags"             => if let Some(arr) = v.as_array() { l.tags = arr.iter().filter_map(|x| x.as_str().map(String::from)).collect(); },
+            _ => {}
+        }
+    }
+    l.updated_at = now_iso();
+    lessons[idx] = l.clone();
+    write_json(&path, &lessons)?;
+    Ok(l)
+}
+
+#[derive(Deserialize)]
+pub struct LessonDeleteArgs { pub cwd: String, pub id: String }
+
+#[tauri::command]
+pub fn lessons_delete(args: LessonDeleteArgs) -> Result<(), String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let path = dir.join("lessons.json");
+    let mut lessons: Vec<Lesson> = read_json(&path)?;
+    lessons.retain(|l| l.id != args.id);
+    write_json(&path, &lessons)
+}
+
+// Lead → tickets / agents bridge.
+// Lead's onboarding kickoff writes proposals to two sentinel files; on
+// Approve-brief, Yunomia ingests them into real tickets + agents.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ProposedTicket {
+    pub title: String,
+    pub body_md: Option<String>,
+    pub r#type: Option<String>,
+    pub audience: Option<String>,
+    pub assignee_agent: Option<String>,
+}
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ProposedAgent {
+    pub code: String,
+    pub model: Option<String>,
+    pub reason: Option<String>,
+    pub wakeup_mode: Option<String>,    // "heartbeat" | "on-assignment"
+}
+
+#[derive(Deserialize)]
+pub struct ProposalsReadArgs { pub cwd: String }
+
+#[derive(Serialize)]
+pub struct Proposals {
+    pub tickets: Vec<ProposedTicket>,
+    pub agents: Vec<ProposedAgent>,
+}
+
+#[tauri::command]
+pub fn proposals_read(args: ProposalsReadArgs) -> Result<Proposals, String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    let tickets: Vec<ProposedTicket> = if dir.join("proposed-tickets.json").exists() {
+        let raw = fs::read_to_string(dir.join("proposed-tickets.json")).map_err(|e| e.to_string())?;
+        if raw.trim().is_empty() { Vec::new() } else { serde_json::from_str(&raw).unwrap_or_default() }
+    } else { Vec::new() };
+    let agents: Vec<ProposedAgent> = if dir.join("proposed-agents.json").exists() {
+        let raw = fs::read_to_string(dir.join("proposed-agents.json")).map_err(|e| e.to_string())?;
+        if raw.trim().is_empty() { Vec::new() } else { serde_json::from_str(&raw).unwrap_or_default() }
+    } else { Vec::new() };
+    Ok(Proposals { tickets, agents })
+}
+
+#[derive(Deserialize)]
+pub struct ProposalsClearArgs { pub cwd: String }
+
+#[tauri::command]
+pub fn proposals_clear(args: ProposalsClearArgs) -> Result<(), String> {
+    let dir = ensure_project_dir(&args.cwd)?;
+    for f in &["proposed-tickets.json", "proposed-agents.json"] {
+        let p = dir.join(f);
+        if p.exists() { let _ = fs::remove_file(p); }
+    }
+    Ok(())
+}
+
 fn write_audit(dir: &PathBuf, action: &str, ticket_id: &str, actor: &str, details: serde_json::Value) -> Result<(), String> {
     let path = dir.join("audit.json");
     let mut audit: Vec<AuditEntry> = read_json(&path)?;

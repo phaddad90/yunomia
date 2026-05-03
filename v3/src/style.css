@@ -301,6 +301,148 @@ body {
 .kanban-col { display: flex; flex-direction: column; min-height: 0; gap: 8px; }
 .kanban-root { overflow-x: auto; min-height: 0; flex: 1; }
 
+/* Sub-tabs (Kanban / Activity / Inbox / Lessons / Reports / Agents) */
+.subtabs {
+  display: flex; gap: 4px; flex-shrink: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 4px;
+}
+.subtab {
+  font: inherit; font-size: 12px; font-weight: 500;
+  padding: 5px 12px; border: 1px solid transparent; border-radius: var(--radius);
+  background: transparent; color: var(--text-mid); cursor: pointer;
+}
+.subtab:hover { background: var(--surface-2); color: var(--text-hi); }
+.subtab.active { background: var(--pepper-soft); color: var(--pepper); border-color: var(--pepper); font-weight: 600; }
+.subtab-badge { background: var(--pepper); color: white; font-size: 10px; padding: 1px 5px; border-radius: 999px; margin-left: 4px; font-weight: 700; }
+.subview { flex: 1; min-height: 0; overflow-y: auto; }
+.empty-pad { text-align: center; color: var(--text-mid); padding: 40px 20px; font-size: 13px; }
+
+/* Kanban filters bar */
+.kanban-filters {
+  display: flex; gap: 8px; flex-shrink: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 10px;
+}
+.kanban-filters input, .kanban-filters select {
+  font: inherit; font-size: 12px; padding: 4px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface-2); color: var(--text-hi);
+}
+.kanban-filters input { flex: 1; }
+
+/* Schedule badge on cards */
+.sched-badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: #fff8e1; color: #92400e; font-weight: 600;
+}
+.sched-badge.overdue { background: #fee2e2; color: #b91c1c; }
+
+/* Schedule picker in side panel */
+.k-side-sched { display: flex; gap: 6px; align-items: center; margin-bottom: 14px; }
+.k-side-sched input[type="datetime-local"] {
+  flex: 1; padding: 5px 8px; font: inherit; font-size: 12px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+}
+
+/* Activity feed */
+.activity { list-style: none; padding: 8px 0; margin: 0; }
+.activity-row {
+  display: grid; grid-template-columns: 160px 80px 160px 1fr; gap: 12px;
+  padding: 6px 12px; font-size: 12px; border-bottom: 1px solid var(--border);
+}
+.activity-row:hover { background: var(--surface-2); }
+.activity-time { color: var(--text-low); font-family: 'JetBrains Mono', monospace; }
+.activity-actor { font-weight: 600; }
+.activity-action { color: var(--pepper); font-family: 'JetBrains Mono', monospace; }
+.activity-target { color: var(--text-mid); font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+
+/* Inbox */
+.inbox-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text-mid);
+}
+.inbox-list { list-style: none; padding: 0; margin: 0; }
+.inbox-row {
+  display: grid; grid-template-columns: 24px 160px 100px 1fr; gap: 8px; align-items: center;
+  padding: 8px 12px; font-size: 12px; border-bottom: 1px solid var(--border);
+}
+.inbox-row.processed { opacity: 0.5; }
+.inbox-row:hover { background: var(--surface-2); }
+.inbox-mark { background: transparent; border: 1px solid var(--border); border-radius: 50%; width: 22px; height: 22px; cursor: pointer; }
+.inbox-mark:hover { border-color: var(--pepper); color: var(--pepper); }
+.inbox-time { color: var(--text-low); font-family: 'JetBrains Mono', monospace; }
+.inbox-kind { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: var(--surface-2); color: var(--text-mid); text-transform: uppercase; }
+.inbox-summary { color: var(--text-hi); }
+
+/* Lessons */
+.lessons-toolbar { display: flex; gap: 8px; padding: 8px 0; }
+.lessons-toolbar input { flex: 1; padding: 6px 10px; font: inherit; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.lessons-list { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 8px; }
+.lesson-row { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.lesson-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 11px; }
+.lesson-id { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--pepper); }
+.lesson-sev { padding: 1px 6px; border-radius: 999px; font-weight: 600; }
+.lesson-sev.sev-low { background: #ecfdf5; color: #047857; }
+.lesson-sev.sev-medium { background: #fff8e1; color: #92400e; }
+.lesson-sev.sev-high { background: #fee2e2; color: #b91c1c; }
+.lesson-sev.sev-critical { background: #1f2937; color: #fef3c7; }
+.lesson-linked { color: var(--text-mid); font-family: 'JetBrains Mono', monospace; }
+.lesson-when { margin-left: auto; color: var(--text-low); }
+.lesson-symptom { font-weight: 600; margin-bottom: 6px; }
+.lesson-rc, .lesson-fix, .lesson-rec { font-size: 12px; color: var(--text-mid); margin-top: 4px; line-height: 1.5; }
+.lesson-rc b, .lesson-fix b, .lesson-rec b { color: var(--text-hi); margin-right: 4px; }
+.lesson-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.lesson-tag { font-size: 10px; padding: 1px 6px; background: var(--surface-2); color: var(--text-mid); border-radius: 999px; }
+.lessons-empty { text-align: center; padding: 60px 20px; }
+.lessons-empty h3 { color: var(--text-hi); margin: 0 0 8px; }
+.lessons-empty p { color: var(--text-mid); margin: 0 0 16px; }
+.lesson-card { min-width: 480px; }
+.lesson-card .hint { color: var(--text-low); font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; }
+.lesson-card label { display: block; margin: 8px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-mid); font-weight: 600; }
+.lesson-card input, .lesson-card select, .lesson-card textarea {
+  width: 100%; font: inherit; font-size: 12px; padding: 6px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); color: var(--text-hi);
+}
+
+/* Reports */
+.reports { padding: 16px; font-size: 13px; }
+.reports h3 { margin: 16px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-mid); }
+.reports h3:first-child { margin-top: 0; }
+.report-stats, .report-by-agent { list-style: none; padding: 0; margin: 0; }
+.report-stats { display: flex; gap: 16px; }
+.report-stats li { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; }
+.report-stats li b { font-size: 22px; color: var(--pepper); margin-right: 6px; }
+.report-by-agent li { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.report-by-agent .muted { color: var(--text-mid); float: right; }
+
+/* Agents config */
+.agents-cfg { padding: 12px; }
+.agents-cfg header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.agents-cfg h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-mid); margin: 0; }
+.agents-cfg #agents-add { padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 12px; }
+.agents-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; }
+.agent-cfg-row { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+.agent-cfg-row > header { padding: 0 0 8px; border-bottom: 1px solid var(--border); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.agent-cfg-row > header h3 { display: none; }
+.agent-cfg-emoji { font-size: 16px; }
+.agent-cfg-code { font-weight: 600; font-size: 13px; }
+.agent-cfg-remove { margin-left: auto; font-size: 11px; }
+.agent-cfg-body { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+.agent-cfg-body label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-mid); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+.agent-cfg-body select, .agent-cfg-body input[type="number"] {
+  font: inherit; font-size: 12px; padding: 4px 8px; text-transform: none; letter-spacing: 0;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); color: var(--text-hi); font-weight: 400;
+}
+.agent-files { width: 100%; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.agent-files summary { font-size: 12px; cursor: pointer; user-select: none; color: var(--text-mid); }
+.agent-files-tabs { display: flex; gap: 4px; margin: 8px 0; }
+.agent-files-tabs button { font: inherit; font-size: 11px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); cursor: pointer; }
+.agent-files-tabs button.active { background: var(--pepper-soft); border-color: var(--pepper); color: var(--pepper); font-weight: 600; }
+.agent-file-textarea { width: 100%; min-height: 200px; padding: 10px; font-family: 'JetBrains Mono', monospace; font-size: 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text-hi); resize: vertical; }
+.agent-file-save { margin-top: 8px; }
+
 /* Brief panel — collapsible, sits above kanban */
 .brief-panel {
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;

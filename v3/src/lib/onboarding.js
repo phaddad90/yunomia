@@ -42,15 +42,43 @@ onboarding interview. You will:
    Use the Write tool to update the file. Update incrementally, don't wait
    for the full interview to finish.
 
-3. When you and the user agree the brief is solid, propose:
-   - The agent fleet this project needs (CEO/SA/AD/QA/etc) with which model
-     each should run on. Justify each pick in one sentence.
-   - The first 5–10 tickets, scoped tight: title, type, audience, one-line
-     body, suggested assignee.
+3. When you and the user agree the brief is solid, write TWO machine-readable
+   proposal files (not just a markdown section):
 
-   Do NOT create agents or tickets directly. Write proposals to the brief.md
-   under "Proposed agents" and "Proposed initial tickets" sections. The user
-   approves in the UI; Yunomia spawns + creates from there.
+   FILE A — ${cwd}/.yunomia-proposals/proposed-agents.json (note: actually
+   written to ~/.yunomia/projects/<sanitised>/proposed-agents.json — Yunomia
+   reads from there). Schema:
+
+     [
+       { "code": "CEO",  "model": "claude-opus-4-7",  "reason": "orchestrator",       "wakeup_mode": "heartbeat" },
+       { "code": "SA",   "model": "claude-sonnet-4-6","reason": "backend + db",      "wakeup_mode": "on-assignment" },
+       { "code": "QA",   "model": "claude-haiku-4-5-20251001", "reason": "verifications","wakeup_mode": "on-assignment" }
+     ]
+
+   wakeup_mode: "heartbeat" for orchestrators that should wake on a cron;
+   "on-assignment" for workers that wake only when given a ticket.
+
+   FILE B — proposed-tickets.json. Schema:
+
+     [
+       { "title": "Schema migration for orders", "body_md": "…", "type": "migration", "audience": "admin", "assignee_agent": "SA" },
+       { "title": "Login flow E2E test",          "body_md": "…", "type": "feature",   "audience": "app",   "assignee_agent": "QA" }
+     ]
+
+   Use the Write tool to create both files. Paths are relative to:
+   ~/.yunomia/projects/<sanitised-cwd>/
+
+   Where <sanitised-cwd> = the project path with / replaced by - and spaces
+   replaced by _. For this project the sanitised path is:
+   ${cwd.trim().replace(/^\//,'').replace(/\//g,'-').replace(/ /g,'_')}
+
+   So the absolute paths are:
+   ~/.yunomia/projects/${cwd.trim().replace(/^\//,'').replace(/\//g,'-').replace(/ /g,'_')}/proposed-agents.json
+   ~/.yunomia/projects/${cwd.trim().replace(/^\//,'').replace(/\//g,'-').replace(/ /g,'_')}/proposed-tickets.json
+
+   Don't create agents or tickets via any other method. Yunomia ingests
+   these files when the user clicks Approve. You can rewrite either file
+   anytime — the user always sees the latest before approving.
 
 4. Be a real lead, not a yes-bot:
    - Push back when scope is fuzzy.
@@ -156,9 +184,40 @@ export function renderOnboardingView({ container, cwd, state, brief, spawnAgent,
   const approveBtn = container.querySelector('#onb-approve');
   if (approveBtn) {
     approveBtn.addEventListener('click', async () => {
-      if (!confirm(`Approve brief for "${projectName}" and go active? Kanban + ticket creation will unlock.`)) return;
+      // Ingest Lead's proposals if present.
+      let proposals = { tickets: [], agents: [] };
+      try { proposals = await invoke('proposals_read', { args: { cwd } }); } catch {}
+      let summary = `Approve brief for "${projectName}" and go active?`;
+      if (proposals.tickets.length || proposals.agents.length) {
+        summary += `\n\nLead proposed ${proposals.tickets.length} ticket(s) + ${proposals.agents.length} agent(s). These will be created automatically.`;
+      }
+      if (!confirm(summary)) return;
+      for (const pt of proposals.tickets) {
+        try {
+          await invoke('tickets_create', { args: { cwd,
+            title: pt.title || '(untitled)',
+            bodyMd: pt.body_md || '',
+            type: pt.type || 'feature',
+            status: 'triage',
+            audience: pt.audience || 'admin',
+            assigneeAgent: pt.assignee_agent || null,
+          }});
+        } catch (err) { console.warn('proposed ticket create failed', err); }
+      }
+      if (proposals.agents.length) {
+        const agents = proposals.agents.map((a) => ({
+          code: a.code,
+          model: a.model || 'claude-sonnet-4-6',
+          wakeup_mode: a.wakeup_mode || (a.code === 'LEAD' || a.code === 'CEO' ? 'heartbeat' : 'on-assignment'),
+          heartbeat_min: 60,
+          note: a.reason || null,
+        }));
+        try { await invoke('project_agents_upsert', { args: { cwd, agents } }); } catch {}
+      }
+      try { await invoke('proposals_clear', { args: { cwd } }); } catch {}
       await approveBrief(cwd);
       onApproved && onApproved();
+      return;
     });
   }
 }
