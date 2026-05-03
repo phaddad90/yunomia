@@ -637,6 +637,119 @@ async function renderProjectView() {
 window.__renderProjectView = renderProjectView;
 void renderProjectView();
 
+// ─── Drag-to-resize rails ───
+// Saves widths to localStorage; restores on boot. Min 180px, max 50vw.
+const LS_RAIL_LEFT  = 'yunomia.railLeftW';
+const LS_RAIL_RIGHT = 'yunomia.railRightW';
+function applyRailWidths() {
+  const left  = parseInt(localStorage.getItem(LS_RAIL_LEFT)  || '240', 10);
+  const right = parseInt(localStorage.getItem(LS_RAIL_RIGHT) || '320', 10);
+  document.documentElement.style.setProperty('--rail-left-w',  `${left}px`);
+  document.documentElement.style.setProperty('--rail-right-w', `${right}px`);
+}
+applyRailWidths();
+function bindResizers() {
+  document.querySelectorAll('.resizer').forEach((r) => {
+    r.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const side = r.dataset.resize;
+      const startX = e.clientX;
+      const startLeft  = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--rail-left-w'), 10) || 240;
+      const startRight = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--rail-right-w'), 10) || 320;
+      document.body.style.cursor = 'col-resize';
+      const onMove = (ev) => {
+        const dx = ev.clientX - startX;
+        if (side === 'left') {
+          const next = Math.max(180, Math.min(window.innerWidth * 0.5, startLeft + dx));
+          document.documentElement.style.setProperty('--rail-left-w', `${next}px`);
+          localStorage.setItem(LS_RAIL_LEFT, String(Math.round(next)));
+        } else {
+          const next = Math.max(180, Math.min(window.innerWidth * 0.5, startRight - dx));
+          document.documentElement.style.setProperty('--rail-right-w', `${next}px`);
+          localStorage.setItem(LS_RAIL_RIGHT, String(Math.round(next)));
+        }
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+  });
+}
+bindResizers();
+
+// ─── Theme ───
+const LS_THEME = 'yunomia.theme';
+function applyTheme() {
+  const pref = localStorage.getItem(LS_THEME) || 'light';
+  let resolved = pref;
+  if (pref === 'auto') {
+    resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  document.documentElement.dataset.theme = resolved;
+}
+applyTheme();
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if ((localStorage.getItem(LS_THEME) || 'light') === 'auto') applyTheme();
+});
+
+// ─── Settings modal ───
+function bindSettings() {
+  const btn   = document.getElementById('settings-btn');
+  const modal = document.getElementById('settings-modal');
+  if (!btn || !modal) return;
+  btn.addEventListener('click', () => openSettings());
+  document.getElementById('settings-close').addEventListener('click', () => modal.classList.add('hidden'));
+  modal.addEventListener('click', (e) => { if (e.target.id === 'settings-modal') modal.classList.add('hidden'); });
+}
+async function openSettings() {
+  const modal = document.getElementById('settings-modal');
+  // Theme radio
+  const pref = localStorage.getItem(LS_THEME) || 'light';
+  modal.querySelectorAll('input[name="theme"]').forEach((r) => {
+    r.checked = r.value === pref;
+    r.onchange = () => {
+      localStorage.setItem(LS_THEME, r.value);
+      applyTheme();
+    };
+  });
+  // Max concurrent
+  const slider = document.getElementById('settings-max-concurrent');
+  const val    = document.getElementById('settings-max-concurrent-val');
+  slider.value = String(state.maxConcurrent);
+  val.textContent = String(state.maxConcurrent);
+  slider.oninput = () => {
+    state.maxConcurrent = parseInt(slider.value, 10) || 3;
+    val.textContent = String(state.maxConcurrent);
+    localStorage.setItem('yunomia.maxConcurrent', String(state.maxConcurrent));
+  };
+  // Default models
+  try { state.stickyModels = await invoke('models_get'); } catch { /* ignore */ }
+  const wrap = document.getElementById('settings-models');
+  const codes = ['LEAD','CEO','SA','AD','WA','DA','QA','WD','TA'];
+  wrap.innerHTML = codes.map((c) => {
+    const cur = state.stickyModels?.[c] || AGENT_MODELS_DEFAULT[c] || 'claude-sonnet-4-6';
+    const opts = ['claude-sonnet-4-6','claude-opus-4-7','claude-haiku-4-5-20251001']
+      .map((m) => `<option value="${m}"${m===cur?' selected':''}>${m}</option>`).join('');
+    return `<label><span>${tabEmoji(c)} ${c}</span><select data-code="${c}">${opts}</select></label>`;
+  }).join('');
+  wrap.querySelectorAll('select').forEach((sel) => {
+    sel.addEventListener('change', async () => {
+      const code = sel.dataset.code;
+      try { await invoke('models_set', { args: { code, model: sel.value } }); state.stickyModels[code] = sel.value; }
+      catch (e) { console.warn('models_set failed', e); }
+    });
+  });
+  modal.classList.remove('hidden');
+}
+bindSettings();
+
+// Restore maxConcurrent on boot.
+state.maxConcurrent = parseInt(localStorage.getItem('yunomia.maxConcurrent') || '3', 10);
+
 // Keyboard shortcuts — match IDE muscle memory.
 //   Cmd+T  = open spawn-agent modal (when active phase)
 //   Cmd+W  = close current tab (if not Dashboard)

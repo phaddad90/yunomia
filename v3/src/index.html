@@ -22,6 +22,7 @@
         <select id="project-picker" aria-label="Project root"></select>
       </label>
       <button id="spawn-agent" class="btn-primary" type="button" hidden>+ Spawn agent</button>
+      <button id="settings-btn" class="btn-ghost" type="button" title="Settings">⚙</button>
     </div>
   </header>
   <main id="panes">
@@ -29,6 +30,7 @@
       <div id="onboarding-root" class="onboarding-root" hidden></div>
       <div id="dashboard-active" class="dashboard-layout">
         <aside id="agent-rail" class="agent-rail"></aside>
+        <div class="resizer" data-resize="left"></div>
         <div class="kanban-col">
           <details id="brief-panel" class="brief-panel">
             <summary>📋 Project brief — <span id="brief-name"></span></summary>
@@ -37,6 +39,7 @@
           </details>
           <div id="kanban-root" class="kanban-root"></div>
         </div>
+        <div class="resizer" data-resize="right"></div>
         <aside class="rail-right">
           <h3>New ticket</h3>
           <form id="new-ticket-form" class="new-ticket-form">
@@ -75,6 +78,46 @@
       <aside id="k-side" class="k-side hidden"></aside>
     </section>
   </main>
+
+  <!-- Settings modal -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-card settings-card">
+      <header><h3>Settings</h3></header>
+      <section class="settings-section">
+        <h4>Theme</h4>
+        <div class="settings-row">
+          <label><input type="radio" name="theme" value="light" /> Light</label>
+          <label><input type="radio" name="theme" value="dark" /> Dark</label>
+          <label><input type="radio" name="theme" value="auto" /> Auto (follow system)</label>
+        </div>
+      </section>
+      <section class="settings-section">
+        <h4>Concurrency</h4>
+        <div class="settings-row">
+          <label>Max concurrent agents
+            <input id="settings-max-concurrent" type="range" min="1" max="8" />
+            <span id="settings-max-concurrent-val"></span>
+          </label>
+        </div>
+      </section>
+      <section class="settings-section">
+        <h4>Default model per agent</h4>
+        <div id="settings-models" class="settings-models"></div>
+      </section>
+      <section class="settings-section">
+        <h4>Keyboard shortcuts</h4>
+        <table class="settings-shortcuts">
+          <tr><td><kbd>⌘T</kbd></td><td>Spawn agent (active phase)</td></tr>
+          <tr><td><kbd>⌘W</kbd></td><td>Close current tab</td></tr>
+          <tr><td><kbd>⌘1</kbd>–<kbd>⌘9</kbd></td><td>Switch to tab N</td></tr>
+          <tr><td><kbd>⌘R</kbd></td><td>Reload Yunomia</td></tr>
+        </table>
+      </section>
+      <div class="modal-actions">
+        <button type="button" id="settings-close" class="btn-primary">Close</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Add project modal -->
   <div id="project-modal" class="modal hidden">

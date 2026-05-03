@@ -9,6 +9,19 @@
   --pepper: #d93a00;
   --pepper-soft: #ffe4d6;
   --radius: 6px;
+  --rail-left-w: 240px;
+  --rail-right-w: 320px;
+}
+:root[data-theme="dark"] {
+  --bg: #0a0a0b;
+  --surface: #161617;
+  --surface-2: #1f1f21;
+  --border: #2a2a2c;
+  --text-hi: #ededed;
+  --text-mid: #a1a1aa;
+  --text-low: #71717a;
+  --pepper: #ff5722;
+  --pepper-soft: #3a1f17;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
@@ -132,6 +145,26 @@ body {
   background: var(--surface);
 }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+/* Settings modal */
+.settings-card { min-width: 460px; max-width: 600px; max-height: 80vh; overflow-y: auto; }
+.settings-section { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.settings-section:last-of-type { border-bottom: 0; }
+.settings-section h4 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-mid); }
+.settings-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 13px; }
+.settings-row label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+.settings-row input[type="range"] { flex: 1; max-width: 200px; }
+.settings-models { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.settings-models label { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+.settings-models label span { width: 60px; flex-shrink: 0; }
+.settings-models select { flex: 1; padding: 4px 6px; font-size: 11px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); color: var(--text-hi); font-family: 'JetBrains Mono', monospace; }
+.settings-shortcuts { width: 100%; font-size: 12px; }
+.settings-shortcuts td { padding: 4px 8px; }
+.settings-shortcuts td:first-child { width: 100px; color: var(--text-mid); }
+.settings-shortcuts kbd {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 6px; font-family: inherit; font-size: 11px; font-weight: 600;
+}
 .proj-path-row { display: flex; gap: 6px; align-items: center; }
 .proj-path-row input { flex: 1; }
 .proj-path-row button { white-space: nowrap; padding: 6px 10px; }
@@ -170,8 +203,17 @@ body {
 /* Dashboard layout — kanban + right rail */
 .dashboard-layout {
   flex: 1; min-height: 0;
-  display: grid; grid-template-columns: 240px 1fr 320px; gap: 12px;
+  display: grid; grid-template-columns: var(--rail-left-w) 6px 1fr 6px var(--rail-right-w); gap: 0;
   padding: 12px; background: var(--bg);
+}
+.resizer {
+  cursor: col-resize; background: transparent;
+  position: relative;
+}
+.resizer:hover::after,
+.resizer:active::after {
+  content: ''; position: absolute; top: 4px; bottom: 4px; left: 2px; right: 2px;
+  background: var(--pepper); opacity: 0.3; border-radius: 1px;
 }
 .dashboard-layout[hidden] { display: none; }
 .onboarding-root[hidden] { display: none; }
