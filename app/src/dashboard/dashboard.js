@@ -607,6 +607,7 @@ async function openTicket(id) {
     showStatusMover(t.status);
     $('#side-body').innerHTML = renderTicketDetail(t, r.audit || [], state.selectedTicketComments);
     wireSchedulePicker(t);
+    wireTicketEditors(t);
     void refreshEligibility(t.id);
   } catch (err) {
     $('#side-body').textContent = 'Failed to load: ' + (err.message || err);
@@ -629,6 +630,7 @@ async function refreshOpenTicket() {
     showStatusMover(t.status);
     $('#side-body').innerHTML = renderTicketDetail(t, r.audit || [], state.selectedTicketComments);
     wireSchedulePicker(t);
+    wireTicketEditors(t);
     void refreshEligibility(t.id);
   } catch { /* silent */ }
 }
@@ -669,13 +671,23 @@ function renderTicketDetail(t, audit, commentsArr) {
       ${escapeHtml(c.body_md || '')}
     </div>
   `).join('');
+  // PH-130: title / type / audience / body all editable. Title swaps to input
+  // on click; type + audience are inline selects; body has a ✏ pencil.
+  const typeOpts = ['bug','feature','doc','gate','migration','ops']
+    .map((v) => `<option value="${v}"${v===t.type?' selected':''}>${v}</option>`).join('');
+  const audOpts = ['app','admin']
+    .map((v) => `<option value="${v}"${v===t.audience?' selected':''}>${v}</option>`).join('');
   return `
-    <h2 style="margin:0 0 8px">${escapeHtml(t.title)}</h2>
-    <div style="font-size:12px;color:var(--text-mid);margin-bottom:14px">
-      ${t.assignee_agent ? AGENT_EMOJI[t.assignee_agent] + ' ' + t.assignee_agent : 'Unassigned'} ·
-      ${t.audience} · ${t.type}
+    <h2 class="ticket-title-edit" id="edit-title" title="Click to edit">${escapeHtml(t.title)}</h2>
+    <div class="ticket-meta-edit">
+      ${t.assignee_agent ? AGENT_EMOJI[t.assignee_agent] + ' ' + escapeHtml(t.assignee_agent) : 'Unassigned'} ·
+      <select id="edit-audience" class="meta-select" aria-label="Audience">${audOpts}</select> ·
+      <select id="edit-type" class="meta-select" aria-label="Type">${typeOpts}</select>
     </div>
-    <pre style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:8px">${escapeHtml(t.body_md || '')}</pre>
+    <div class="body-edit-wrap">
+      <button class="btn-ghost body-edit-btn" id="edit-body-btn" type="button" title="Edit body">✏</button>
+      <pre id="body-pre" style="white-space:pre-wrap;background:var(--surface-2);padding:12px;border-radius:8px">${escapeHtml(t.body_md || '')}</pre>
+    </div>
     ${schedBlock}
     ${refList}
     <div class="comments">
@@ -723,6 +735,103 @@ async function moveSelectedToStatus(newStatus) {
     refreshBoard();
   } catch (err) {
     toast('Move failed: ' + (err.message || err), 'error');
+  }
+}
+
+// PH-130: send a PATCH to update ticket fields. The MC server translates to
+// camelCase before forwarding, so callers can use either form. Returns true on
+// success, surfaces a toast on failure.
+async function patchTicket(id, fields) {
+  try {
+    const r = await fetch(`/api/board/tickets/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fields),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || `patch ${r.status}`);
+    }
+    return true;
+  } catch (err) {
+    toast('Save failed: ' + (err.message || err), 'error');
+    return false;
+  }
+}
+
+// PH-130: title click-to-edit, type + audience inline selects, body ✏ pencil.
+function wireTicketEditors(t) {
+  // Title — click to swap for an input, save on Enter or blur, Esc cancels.
+  const title = document.getElementById('edit-title');
+  if (title) {
+    title.addEventListener('click', () => {
+      if (title.dataset.editing === '1') return;
+      title.dataset.editing = '1';
+      const original = t.title || '';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = original;
+      input.maxLength = 280;
+      input.className = 'ticket-title-input';
+      title.replaceWith(input);
+      input.focus();
+      input.select();
+      const finish = async (commit) => {
+        const next = input.value.trim();
+        if (commit && next && next !== original) {
+          const ok = await patchTicket(t.id, { title: next });
+          if (ok) { t.title = next; toast(`Title updated`, 'success'); }
+        }
+        await openTicket(t.id);
+      };
+      input.addEventListener('blur', () => finish(true));
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { input.value = original; finish(false); }
+      });
+    });
+  }
+  // Type + audience selects — PATCH on change.
+  const audSel = document.getElementById('edit-audience');
+  if (audSel) audSel.addEventListener('change', async () => {
+    const ok = await patchTicket(t.id, { audience: audSel.value });
+    if (ok) { t.audience = audSel.value; toast(`Audience → ${audSel.value}`, 'success'); refreshBoard(); }
+  });
+  const typeSel = document.getElementById('edit-type');
+  if (typeSel) typeSel.addEventListener('change', async () => {
+    const ok = await patchTicket(t.id, { type: typeSel.value });
+    if (ok) { t.type = typeSel.value; toast(`Type → ${typeSel.value}`, 'success'); refreshBoard(); }
+  });
+  // Body ✏ — swap <pre> for <textarea> + Save / Cancel.
+  const editBtn = document.getElementById('edit-body-btn');
+  const pre = document.getElementById('body-pre');
+  if (editBtn && pre) {
+    editBtn.addEventListener('click', () => {
+      if (pre.dataset.editing === '1') return;
+      pre.dataset.editing = '1';
+      const original = t.body_md || '';
+      const wrap = document.createElement('div');
+      wrap.className = 'body-edit-active';
+      wrap.innerHTML = `
+        <textarea class="body-edit-textarea" rows="14"></textarea>
+        <div class="body-edit-actions">
+          <button class="btn-secondary" type="button" data-act="save">Save</button>
+          <button class="btn-ghost" type="button" data-act="cancel">Cancel</button>
+        </div>
+      `;
+      pre.replaceWith(wrap);
+      const ta = wrap.querySelector('textarea');
+      ta.value = original;
+      ta.focus();
+      wrap.querySelector('[data-act="save"]').addEventListener('click', async () => {
+        const next = ta.value;
+        if (next === original) { await openTicket(t.id); return; }
+        const ok = await patchTicket(t.id, { bodyMd: next });
+        if (ok) { t.body_md = next; toast('Body updated', 'success'); }
+        await openTicket(t.id);
+      });
+      wrap.querySelector('[data-act="cancel"]').addEventListener('click', () => openTicket(t.id));
+    });
   }
 }
 

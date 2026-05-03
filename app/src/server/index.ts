@@ -276,11 +276,27 @@ async function main() {
   });
   app.patch('/api/board/tickets/:id', async (req, res) => {
     try {
+      // PH-130: admin API enforces camelCase per compliance rule
+      // `patch-snake-case-rejected`. Translate at the MC server boundary so
+      // dashboard callers can send either form.
+      const SNAKE_TO_CAMEL: Record<string, string> = {
+        body_md: 'bodyMd',
+        assignee_agent: 'assigneeAgent',
+      };
       const allowed: Record<string, unknown> = {};
-      const fields = ['status', 'assignee_agent', 'audience', 'title', 'body_md', 'type'];
-      for (const f of fields) if (req.body?.[f] !== undefined) allowed[f] = req.body[f];
+      const fields = ['status', 'assignee_agent', 'assigneeAgent', 'audience', 'title', 'body_md', 'bodyMd', 'type'];
+      for (const f of fields) {
+        if (req.body?.[f] === undefined) continue;
+        const outKey = SNAKE_TO_CAMEL[f] || f;
+        allowed[outKey] = req.body[f];
+      }
       const result = await board.patch(req.params.id, allowed as Partial<Ticket>);
-      events?.emitLocalTicketChanged(req.params.id, '', allowed as Partial<Ticket>, Object.keys(allowed));
+      // The local granular event still uses snake_case keys for dashboard state
+      // patching — translate back for the in-memory ticket cache shape.
+      const CAMEL_TO_SNAKE: Record<string, string> = { bodyMd: 'body_md', assigneeAgent: 'assignee_agent' };
+      const localPatch: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(allowed)) localPatch[CAMEL_TO_SNAKE[k] || k] = v;
+      events?.emitLocalTicketChanged(req.params.id, '', localPatch as Partial<Ticket>, Object.keys(localPatch));
       broadcast({ type: 'tickets_changed', data: { reason: 'patch' } });
       res.json(result);
     } catch (err) { handleErr(res, err); }
