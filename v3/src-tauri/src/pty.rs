@@ -68,8 +68,11 @@ fn spawn_inner(
     registry: Arc<Mutex<HashMap<String, PtyHandle>>>,
     app: tauri::AppHandle,
 ) -> Result<PtySummary> {
-    if registry.lock().contains_key(&args.id) {
-        return Err(anyhow!("pty id `{}` already running — kill it first", args.id));
+    // If a pty with this id is already registered (typically because the
+    // frontend reloaded — vite HMR — but the Rust side kept the prior child
+    // alive), drop the old one first so the new spawn can take over cleanly.
+    if registry.lock().remove(&args.id).is_some() {
+        log::info!("dropping stale pty `{}` before respawn", args.id);
     }
 
     let pty_system = native_pty_system();

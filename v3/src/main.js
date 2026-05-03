@@ -343,9 +343,20 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   const args = ['--model', model, '--permission-mode', 'acceptEdits'];
   if (opts.resume) args.push('--resume', opts.resume);
   // Spawn the actual claude process with composite key as pty id.
-  await invoke('pty_spawn', {
-    args: { id: key, command: 'claude', args, cwd, env: null, cols: term.cols, rows: term.rows },
-  });
+  try {
+    await invoke('pty_spawn', {
+      args: { id: key, command: 'claude', args, cwd, env: null, cols: term.cols, rows: term.rows },
+    });
+  } catch (e) {
+    // Surface the error inside the xterm pane so it's not a silent black box.
+    const msg = String(e?.message || e);
+    term.writeln(`\x1b[31m[spawn failed]\x1b[0m ${msg}`);
+    term.writeln(`\x1b[33mHints:\x1b[0m`);
+    term.writeln('  • Is the `claude` CLI on your PATH? Try `which claude` in a normal terminal.');
+    term.writeln('  • If --permission-mode is unsupported on this claude version, edit src/main.js');
+    term.writeln('    and remove that flag.');
+    return;
+  }
   // Persist the sticky model so this agent re-spawns with the same one.
   try { await invoke('models_set', { args: { code, model } }); state.stickyModels[code] = model; }
   catch (e) { console.warn('models_set failed', e); }
