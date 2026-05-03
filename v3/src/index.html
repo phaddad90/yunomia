@@ -186,10 +186,10 @@
       <header><h3>Settings</h3></header>
       <section class="settings-section">
         <h4>Theme</h4>
-        <div class="settings-row">
-          <label><input type="radio" name="theme" value="light" /> Light</label>
-          <label><input type="radio" name="theme" value="dark" /> Dark</label>
-          <label><input type="radio" name="theme" value="auto" /> Auto (follow system)</label>
+        <div class="theme-toggle" id="theme-toggle">
+          <button type="button" data-theme="light" title="Light"><span class="theme-icon">☀</span><span class="theme-label">Light</span></button>
+          <button type="button" data-theme="dark"  title="Dark"><span class="theme-icon">☾</span><span class="theme-label">Dark</span></button>
+          <button type="button" data-theme="auto"  title="Follow system"><span class="theme-icon">◐</span><span class="theme-label">Auto</span></button>
         </div>
       </section>
       <section class="settings-section">

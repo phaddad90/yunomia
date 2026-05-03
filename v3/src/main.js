@@ -870,13 +870,14 @@ function bindSettings() {
 }
 async function openSettings() {
   const modal = document.getElementById('settings-modal');
-  // Theme radio
+  // Theme toggle (icon buttons)
   const pref = localStorage.getItem(LS_THEME) || 'light';
-  modal.querySelectorAll('input[name="theme"]').forEach((r) => {
-    r.checked = r.value === pref;
-    r.onchange = () => {
-      localStorage.setItem(LS_THEME, r.value);
+  modal.querySelectorAll('#theme-toggle button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.theme === pref);
+    btn.onclick = () => {
+      localStorage.setItem(LS_THEME, btn.dataset.theme);
       applyTheme();
+      modal.querySelectorAll('#theme-toggle button').forEach((b) => b.classList.toggle('active', b === btn));
     };
   });
   // Max concurrent

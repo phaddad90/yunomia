@@ -660,7 +660,19 @@ body {
 .proposal-body summary { cursor: pointer; font-weight: 600; font-size: 11px; color: var(--text-mid); text-transform: uppercase; letter-spacing: 0.05em; }
 .proposal-pre { margin: 8px 0 0; padding: 12px; background: var(--surface); border-radius: var(--radius); font-family: 'JetBrains Mono', monospace; font-size: 11px; white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
 
-/* Settings theme radios — fix overlap */
-.settings-row label { display: flex; gap: 6px; align-items: center; cursor: pointer; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--radius); }
-.settings-row label:hover { background: var(--surface-2); }
-.settings-row input[type="radio"] { margin: 0; }
+/* Theme toggle — icon button group */
+.theme-toggle { display: flex; gap: 8px; }
+.theme-toggle button {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 14px 12px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-2); color: var(--text-mid);
+  font: inherit; transition: all 80ms ease;
+}
+.theme-toggle button:hover { border-color: var(--pepper); color: var(--text-hi); }
+.theme-toggle button.active {
+  border-color: var(--pepper); background: var(--pepper-soft); color: var(--pepper);
+  box-shadow: 0 0 0 1px var(--pepper);
+}
+.theme-icon { font-size: 22px; line-height: 1; }
+.theme-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
