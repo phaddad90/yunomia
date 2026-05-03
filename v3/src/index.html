@@ -77,7 +77,10 @@
         <label>Project name <span style="font-weight:400;color:var(--text-low);text-transform:none;letter-spacing:0">(optional — derived from path)</span></label>
         <input id="proj-name" type="text" placeholder="e.g. ERPrintable" />
         <label>Absolute path</label>
-        <input id="proj-path" type="text" placeholder="/Users/peter/Desktop/MyProject" required />
+        <div class="proj-path-row">
+          <input id="proj-path" type="text" placeholder="/Users/peter/Desktop/MyProject" required />
+          <button type="button" id="proj-browse" class="btn-ghost">Browse…</button>
+        </div>
         <div class="modal-actions">
           <button type="button" id="proj-cancel" class="btn-ghost">Cancel</button>
           <button type="submit" class="btn-primary">Add</button>

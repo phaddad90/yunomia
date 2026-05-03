@@ -14,6 +14,7 @@ import { startHeartbeat, noteWakeupSent, noteStdoutFromAgent } from './lib/heart
 import { initKanban, setKanbanProject } from './lib/kanban.js';
 import { loadOnboardingForProject, renderOnboardingView, reopenOnboarding } from './lib/onboarding.js';
 import { writeToAgent } from './lib/mc-bridge.js';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 
 const AGENT_MODELS_DEFAULT = {
   LEAD:'claude-opus-4-7',
@@ -111,6 +112,20 @@ function closeAddProjectModal() { $('#project-modal').classList.add('hidden'); }
 function bindAddProjectModal() {
   $('#proj-cancel').addEventListener('click', closeAddProjectModal);
   $('#project-modal').addEventListener('click', (e) => { if (e.target.id === 'project-modal') closeAddProjectModal(); });
+  $('#proj-browse').addEventListener('click', async () => {
+    try {
+      const picked = await openDialog({ directory: true, multiple: false, title: 'Pick project root' });
+      if (!picked) return;
+      $('#proj-path').value = String(picked);
+      // Default the name from the basename if user hasn't typed one.
+      if (!$('#proj-name').value.trim()) {
+        const parts = String(picked).split('/').filter(Boolean);
+        $('#proj-name').value = parts[parts.length - 1] || '';
+      }
+    } catch (err) {
+      console.warn('dialog open failed', err);
+    }
+  });
   $('#project-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const path = $('#proj-path').value.trim().replace(/\/+$/, '');
