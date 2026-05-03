@@ -296,7 +296,15 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(termWrap);
-  fit.fit();
+  // Use rAF + a small extra delay so the pane's flex layout has settled
+  // before fit reads clientWidth/clientHeight. Without this, fit() runs
+  // against a 0×0 container and the term never grows.
+  requestAnimationFrame(() => requestAnimationFrame(() => { try { fit.fit(); } catch {} }));
+  setTimeout(() => { try { fit.fit(); } catch {} }, 200);
+  // Watch the container — any resize (window grows, devtools open, sidebar
+  // collapses) re-fits the terminal to fill the pane.
+  const ro = new ResizeObserver(() => { try { fit.fit(); } catch {} });
+  ro.observe(termWrap);
 
   setActivePane(key);
 
@@ -327,7 +335,7 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   });
 
   state.ptys.set(key, {
-    term, fit, unlistens: [unlistenOut, unlistenExit],
+    term, fit, ro, unlistens: [unlistenOut, unlistenExit],
     cwd, code, model, temp: !!opts.temp,
     lastStdoutAt: 0, lastWriteAt: 0, blockedReason: null, exited: false,
     spawnedAt: Date.now(),
@@ -422,6 +430,7 @@ async function killPty(key) {
   if (!ent) return;
   try { await invoke('pty_kill', { args: { id: key } }); } catch { /* ignore */ }
   ent.unlistens.forEach((u) => u());
+  try { ent.ro?.disconnect(); } catch { /* ignore */ }
   ent.term.dispose();
   state.ptys.delete(key);
   state.tempAgents.delete(key);
