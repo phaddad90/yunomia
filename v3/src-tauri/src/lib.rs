@@ -26,6 +26,7 @@ pub fn run() {
             store::models_get,
             store::models_set,
             store::enumerate_sessions,
+            store::agent_context_estimate,
             tickets::tickets_list,
             tickets::tickets_create,
             tickets::tickets_patch,

@@ -233,6 +233,28 @@ async function submitSpawn() {
   }
 }
 
+// Context-window estimate poller. Runs every 5s for each running pty, stores
+// the latest estimate on the pty entry. Tab head, pane overlay, and agent
+// rail all read from there.
+async function refreshContextStats() {
+  for (const [, ent] of state.ptys.entries()) {
+    if (ent.exited) continue;
+    try {
+      const est = await invoke('agent_context_estimate', { args: { cwd: ent.cwd } });
+      ent.contextEstimate = est || null;
+    } catch (e) { /* ignore — file probably not there yet */ }
+  }
+}
+setInterval(refreshContextStats, 5000);
+setTimeout(refreshContextStats, 1500);   // first reading shortly after boot
+
+function contextChipHtml(est) {
+  if (!est) return '';
+  const p = est.percent ?? 0;
+  const cls = p >= 50 ? 'cw-red' : p >= 30 ? 'cw-amber' : 'cw-green';
+  return `<span class="cw-chip ${cls}" title="${est.tokens_estimated.toLocaleString()} tokens (~est) · session ${est.session_id.slice(0,8)}">${p}%</span>`;
+}
+
 // Composite key — same agent code can run independently per project.
 // Must be Tauri-event-safe: only [A-Za-z0-9_-]. Slashes and pipes break
 // the `pty://output/<id>` event channel silently → black-screen pty.
@@ -260,7 +282,7 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   tabBtn.dataset.pane = key;
   tabBtn.dataset.cwd = cwd;
   tabBtn.dataset.code = code;
-  tabBtn.innerHTML = `<span class="status-dot" data-status="idle"></span><span class="tab-emoji">${tabEmoji(code)}</span> ${code} <span class="tab-close" title="Kill" data-kill="1">×</span>`;
+  tabBtn.innerHTML = `<span class="status-dot" data-status="idle"></span><span class="tab-emoji">${tabEmoji(code)}</span> ${code} <span class="cw-slot"></span> <span class="tab-close" title="Kill" data-kill="1">×</span>`;
   tabBtn.addEventListener('click', (e) => {
     if (e.target.dataset.kill) { void killPty(key); return; }
     setActivePane(key);
@@ -271,6 +293,10 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   pane.className = 'pane';
   pane.dataset.pane = key;
   pane.dataset.cwd = cwd;
+  const overlay = document.createElement('div');
+  overlay.className = 'pane-overlay';
+  overlay.innerHTML = `<span class="pane-overlay-model">${escapeHtml(model)}</span> <span class="pane-overlay-cw"></span>`;
+  pane.appendChild(overlay);
   const termWrap = document.createElement('div');
   termWrap.className = 'term-wrap';
   pane.appendChild(termWrap);
@@ -486,7 +512,7 @@ function renderAgentRail() {
         <span class="ar-emoji">${tabEmoji(code)}</span>
         <div class="ar-mid">
           <span class="ar-code">${code}</span>
-          <span class="ar-label">${escapeHtml(label)}</span>
+          <span class="ar-label">${escapeHtml(label)} ${contextChipHtml(ent.contextEstimate)}</span>
         </div>
         <span class="ar-dot" data-status="${stat}"></span>
         <button class="ar-action" data-act="open" title="Open tab">↗</button>
@@ -509,11 +535,15 @@ function renderAgentRail() {
   });
 }
 
-// Update tab status dots + agent rail every second.
+// Update tab status dots + agent rail + context-window chips every second.
 function statusLoopTick() {
   for (const [key, ent] of state.ptys.entries()) {
     const tab = document.querySelector(`#pane-tabs .tab[data-pane="${CSS.escape(key)}"] .status-dot`);
     if (tab) tab.dataset.status = deriveStatus(ent).state;
+    const cwSlot = document.querySelector(`#pane-tabs .tab[data-pane="${CSS.escape(key)}"] .cw-slot`);
+    if (cwSlot) cwSlot.innerHTML = contextChipHtml(ent.contextEstimate);
+    const overlay = document.querySelector(`#panes .pane[data-pane="${CSS.escape(key)}"] .pane-overlay-cw`);
+    if (overlay) overlay.innerHTML = ent.contextEstimate ? `${contextChipHtml(ent.contextEstimate)} <span class="pane-overlay-tok">${ent.contextEstimate.tokens_estimated.toLocaleString()} / 200K tok</span>` : '';
   }
   renderAgentRail();
 }

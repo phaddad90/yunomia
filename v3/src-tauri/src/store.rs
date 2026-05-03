@@ -144,6 +144,56 @@ pub fn enumerate_sessions(args: EnumerateArgs) -> Result<Vec<SessionInfo>, Strin
     Ok(entries)
 }
 
+// Context-window estimate. Reads the latest JSONL file for a (cwd) under
+// ~/.claude/projects/, returns byte size + a token estimate (bytes ÷ 4) +
+// percent of a 200K context window. Stand-in until Claude Code hooks emit
+// canonical <session>-stats.json — same shape will be returned then.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ContextEstimate {
+    pub session_id: String,
+    pub bytes: u64,
+    pub tokens_estimated: u64,
+    pub percent: u32,
+    pub source: String,    // "jsonl-bytes" today, "stats-hook" once hooks land
+}
+
+#[derive(Deserialize)]
+pub struct ContextEstimateArgs {
+    pub cwd: String,
+}
+
+const CONTEXT_WINDOW_TOKENS: u64 = 200_000;
+
+#[tauri::command]
+pub fn agent_context_estimate(args: ContextEstimateArgs) -> Result<Option<ContextEstimate>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let sanitised = args.cwd.trim_start_matches('/').replace('/', "-").replace('.', "-");
+    let proj_dir = PathBuf::from(&home).join(".claude").join("projects").join(format!("-{}", sanitised));
+    if !proj_dir.exists() { return Ok(None); }
+    // Pick the newest jsonl file.
+    let mut newest: Option<(PathBuf, std::time::SystemTime, u64)> = None;
+    for entry in fs::read_dir(&proj_dir).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") { continue; }
+        let meta = match entry.metadata() { Ok(m) => m, Err(_) => continue };
+        let modified = match meta.modified() { Ok(m) => m, Err(_) => continue };
+        let len = meta.len();
+        let take = newest.as_ref().map(|(_, t, _)| modified > *t).unwrap_or(true);
+        if take { newest = Some((path, modified, len)); }
+    }
+    let (path, _, bytes) = match newest { Some(x) => x, None => return Ok(None) };
+    let session_id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    let tokens_estimated = bytes / 4;       // rough — replace with hook stats once available
+    let percent = ((tokens_estimated * 100) / CONTEXT_WINDOW_TOKENS).min(100) as u32;
+    Ok(Some(ContextEstimate {
+        session_id,
+        bytes,
+        tokens_estimated,
+        percent,
+        source: "jsonl-bytes".into(),
+    }))
+}
+
 // PH-134 Phase 3 — pty stdin audit log. Append every byte written to an agent's
 // stdin to ~/.printpepper/pty-audit-<AGENT>.log with timestamp.
 pub fn audit_pty_write(agent_code: &str, data: &str) {
