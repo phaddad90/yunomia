@@ -86,11 +86,13 @@ export async function markLeadSpawned(cwd) {
 
 // Render the onboarding view into a container element.
 // `spawnAgent(code, model, cwd, opts)` is the spawn function from main.js.
-export function renderOnboardingView({ container, cwd, state, brief, spawnAgent, onApproved }) {
+// `leadRunning` is the live pty status, NOT the stored flag — pty dies on app
+// restart, so we check the actual registry every render instead of trusting
+// state.lead_spawned_at (which was useful once but now misleads after a quit).
+export function renderOnboardingView({ container, cwd, state, brief, spawnAgent, onApproved, leadRunning = false }) {
   if (!container) return;
   const projectName = state.project_name || projectLabel(cwd);
   const briefPath = `~/.yunomia/projects/${cwd.replace(/^\//, '').replace(/\//g, '-').replace(/ /g, '_')}/brief.md`;
-  const leadRunning = !!state.lead_spawned_at;
   const briefHasContent = (brief || '').trim().length > 50;
   container.innerHTML = `
     <div class="onb">
@@ -141,14 +143,14 @@ export function renderOnboardingView({ container, cwd, state, brief, spawnAgent,
       await markLeadSpawned(cwd);
       // Re-render
       const fresh = await loadOnboardingForProject(cwd);
-      renderOnboardingView({ container, cwd, state: fresh.state, brief: fresh.brief, spawnAgent, onApproved });
+      renderOnboardingView({ container, cwd, state: fresh.state, brief: fresh.brief, spawnAgent, onApproved, leadRunning: true });
     });
   }
   const refreshBtn = container.querySelector('#onb-refresh-brief');
   if (refreshBtn) {
     refreshBtn.addEventListener('click', async () => {
       const fresh = await loadOnboardingForProject(cwd);
-      renderOnboardingView({ container, cwd, state: fresh.state, brief: fresh.brief, spawnAgent, onApproved });
+      renderOnboardingView({ container, cwd, state: fresh.state, brief: fresh.brief, spawnAgent, onApproved, leadRunning });
     });
   }
   const approveBtn = container.querySelector('#onb-approve');

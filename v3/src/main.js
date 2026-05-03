@@ -508,6 +508,8 @@ async function renderProjectView() {
     if (activeRoot) activeRoot.hidden = true;
     if (onbRoot)    onbRoot.hidden = false;
     if (spawnBtn)   spawnBtn.hidden = true;     // onboarding spawns Lead via the onb CTA
+    const leadKey = ptyKey(cwd, 'LEAD');
+    const leadRunning = state.ptys.has(leadKey);
     renderOnboardingView({
       container: onbRoot,
       cwd,
@@ -515,6 +517,7 @@ async function renderProjectView() {
       brief,
       spawnAgent: (code, model, cwd, opts) => spawnAgent(code, model, cwd, opts),
       onApproved: () => renderProjectView(),
+      leadRunning,
     });
   } else {
     if (onbRoot)    onbRoot.hidden = true;
