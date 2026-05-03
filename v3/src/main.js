@@ -32,7 +32,7 @@ const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
 
 const state = {
-  ptys: new Map(),         // id → { term, fit, unlistens: [], cwd, model, temp }
+  ptys: new Map(),         // key = `${cwd}|${code}` → { term, fit, unlistens, cwd, code, model, temp, lastStdoutAt, lastWriteAt, blockedReason }
   activePane: 'dashboard',
   stickyModels: {},        // PH-134 Phase 2: agent → model, persisted via Rust store
   maxConcurrent: 3,        // PH-134 Phase 3: concurrency limit slider
@@ -113,9 +113,29 @@ function setActivePane(id) {
   state.activePane = id;
   $$('#pane-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.pane === id));
   $$('#panes .pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === id));
-  // Re-fit any xterm in the activated pane (xterm needs a layout pass after display change).
   const ent = state.ptys.get(id);
   if (ent) requestAnimationFrame(() => ent.fit.fit());
+}
+
+// Show/hide tabs + panes based on currently selected project.
+function applyProjectVisibility() {
+  const cwd = state.selectedProject;
+  $$('#pane-tabs .tab').forEach((t) => {
+    if (t.dataset.pane === 'dashboard') return;     // always visible
+    t.style.display = (t.dataset.cwd === cwd) ? '' : 'none';
+  });
+  $$('#panes .pane').forEach((p) => {
+    if (p.dataset.pane === 'dashboard') return;
+    if (p.dataset.cwd && p.dataset.cwd !== cwd && p.classList.contains('active')) {
+      p.classList.remove('active');
+      $$('#pane-tabs .tab').forEach((t) => t.classList.remove('active'));
+      const dash = $('#pane-tabs .tab[data-pane="dashboard"]');
+      const dashPane = $('#panes .pane[data-pane="dashboard"]');
+      if (dash) dash.classList.add('active');
+      if (dashPane) dashPane.classList.add('active');
+      state.activePane = 'dashboard';
+    }
+  });
 }
 
 function bindUi() {
@@ -176,25 +196,39 @@ async function submitSpawn() {
   }
 }
 
-// PH-134 — spawn one agent in a new pty pane. Real `claude` CLI in pty.
+// Composite key — same agent code can run independently per project.
+function ptyKey(cwd, code) { return `${cwd}|${code}`; }
+function visibleAgents() {
+  const out = [];
+  for (const [key, ent] of state.ptys.entries()) {
+    if (ent.cwd === state.selectedProject) out.push({ key, ent });
+  }
+  return out;
+}
+
+// Spawn one agent in a new pty pane in the given project's cwd.
 async function spawnAgent(code, model, cwd, opts = {}) {
-  if (state.ptys.has(code)) {
-    setActivePane(code);
+  const key = ptyKey(cwd, code);
+  if (state.ptys.has(key)) {
+    setActivePane(key);
     return;
   }
   const tabBtn = document.createElement('button');
   tabBtn.className = 'tab';
-  tabBtn.dataset.pane = code;
-  tabBtn.innerHTML = `<span class="tab-emoji">${tabEmoji(code)}</span> ${code} <span class="tab-close" title="Kill" data-kill="${code}">×</span>`;
+  tabBtn.dataset.pane = key;
+  tabBtn.dataset.cwd = cwd;
+  tabBtn.dataset.code = code;
+  tabBtn.innerHTML = `<span class="status-dot" data-status="idle"></span><span class="tab-emoji">${tabEmoji(code)}</span> ${code} <span class="tab-close" title="Kill" data-kill="1">×</span>`;
   tabBtn.addEventListener('click', (e) => {
-    if (e.target.dataset.kill) { void killPty(code); return; }
-    setActivePane(code);
+    if (e.target.dataset.kill) { void killPty(key); return; }
+    setActivePane(key);
   });
   $('#pane-tabs').appendChild(tabBtn);
 
   const pane = document.createElement('section');
   pane.className = 'pane';
-  pane.dataset.pane = code;
+  pane.dataset.pane = key;
+  pane.dataset.cwd = cwd;
   const termWrap = document.createElement('div');
   termWrap.className = 'term-wrap';
   pane.appendChild(termWrap);
@@ -213,28 +247,39 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   term.open(termWrap);
   fit.fit();
 
-  setActivePane(code);
+  setActivePane(key);
 
   // Stream stdout from the pty into xterm.
-  const unlistenOut = await listen(`pty://output/${code}`, (evt) => {
+  const unlistenOut = await listen(`pty://output/${key}`, (evt) => {
     term.write(evt.payload);
-    noteStdoutFromAgent(code);   // PH-134 Phase 3 — heartbeat L0 signal
+    noteStdoutFromAgent(key);
+    const ent = state.ptys.get(key);
+    if (ent) ent.lastStdoutAt = Date.now();
   });
-  const unlistenExit = await listen(`pty://exit/${code}`, (evt) => {
+  const unlistenExit = await listen(`pty://exit/${key}`, (evt) => {
     term.writeln(`\r\n\x1b[31m[pty exited code=${evt.payload?.code ?? '?'}]\x1b[0m`);
+    const ent = state.ptys.get(key);
+    if (ent) ent.exited = true;
   });
 
-  // Stdin: forward xterm input + emit any /pty-audit hook (PH-134 Phase 3).
+  // Stdin: forward xterm input.
   term.onData((data) => {
-    invoke('pty_write', { args: { id: code, data } }).catch((e) => console.warn('pty_write', e));
+    invoke('pty_write', { args: { id: key, data } }).catch((e) => console.warn('pty_write', e));
+    const ent = state.ptys.get(key);
+    if (ent) ent.lastWriteAt = Date.now();
   });
-  // PH-134 Q1 — wire TIOCSWINSZ on resize.
+  // TIOCSWINSZ on resize.
   term.onResize(({ cols, rows }) => {
-    invoke('pty_resize', { args: { id: code, cols, rows } }).catch((e) => console.warn('pty_resize', e));
+    invoke('pty_resize', { args: { id: key, cols, rows } }).catch((e) => console.warn('pty_resize', e));
   });
 
-  state.ptys.set(code, { term, fit, unlistens: [unlistenOut, unlistenExit], cwd, model, temp: !!opts.temp });
-  if (opts.temp) state.tempAgents.add(code);
+  state.ptys.set(key, {
+    term, fit, unlistens: [unlistenOut, unlistenExit],
+    cwd, code, model, temp: !!opts.temp,
+    lastStdoutAt: 0, lastWriteAt: 0, blockedReason: null, exited: false,
+    spawnedAt: Date.now(),
+  });
+  if (opts.temp) state.tempAgents.add(key);
 
   // Spawn the actual claude process. Args:
   //   --model <model>                 per-agent /model selection
@@ -244,16 +289,9 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   // opts.kickoff = onboarding kickoff prompt — auto-pasted after spawn (Lead path).
   const args = ['--model', model, '--permission-mode', 'acceptEdits'];
   if (opts.resume) args.push('--resume', opts.resume);
+  // Spawn the actual claude process with composite key as pty id.
   await invoke('pty_spawn', {
-    args: {
-      id: code,
-      command: 'claude',
-      args,
-      cwd,
-      env: null,
-      cols: term.cols,
-      rows: term.rows,
-    },
+    args: { id: key, command: 'claude', args, cwd, env: null, cols: term.cols, rows: term.rows },
   });
   // Persist the sticky model so this agent re-spawns with the same one.
   try { await invoke('models_set', { args: { code, model } }); state.stickyModels[code] = model; }
@@ -262,7 +300,7 @@ async function spawnAgent(code, model, cwd, opts = {}) {
   // delay so claude has finished its TUI splash before we shove the prompt in.
   if (opts.kickoff) {
     setTimeout(() => {
-      void writeToAgent(code, opts.kickoff + '\n').catch((e) => console.warn('kickoff paste failed', e));
+      void invoke('pty_write', { args: { id: key, data: opts.kickoff + '\n' } }).catch((e) => console.warn('kickoff paste failed', e));
     }, 2000);
   }
 }
@@ -279,35 +317,39 @@ function buildWakeupPrompt({ ticketHumanId, reason }) {
 
 async function onWakeup(payload) {
   const { agentCode, ticketHumanId, reason } = payload;
-  if (!state.ptys.has(agentCode)) return;   // agent not running in this shell
+  // Wakeup goes to the agent running in the CURRENT project (not arbitrary instance).
+  const key = ptyKey(state.selectedProject, agentCode);
+  if (!state.ptys.has(key)) return;
   try {
-    await writeToAgent(agentCode, buildWakeupPrompt(payload));
-    noteWakeupSent(agentCode, ticketHumanId, reason);   // heartbeat L0 input
-    console.info(`[wakeup] ${agentCode} ← ${reason}`);
+    await invoke('pty_write', { args: { id: key, data: buildWakeupPrompt(payload) } });
+    noteWakeupSent(key, ticketHumanId, reason);
+    const ent = state.ptys.get(key);
+    if (ent) ent.lastWriteAt = Date.now();
+    console.info(`[wakeup] ${key} ← ${reason}`);
   } catch (err) {
-    console.warn(`[wakeup] write failed for ${agentCode}`, err);
+    console.warn(`[wakeup] write failed for ${key}`, err);
   }
 }
 
-// PH-134 Phase 3 — temp-agent auto-dispose hook. When a flagged temp agent
-// posts their first task-boundary verdict, kill their pty after a short grace.
 function maybeDisposeTempAgent(agentCode) {
-  if (!state.tempAgents.has(agentCode)) return;
-  console.info(`[temp-agent] ${agentCode} completed first task — auto-disposing in 30s`);
-  state.tempAgents.delete(agentCode);
-  setTimeout(() => { void killPty(agentCode); }, 30_000);
+  const key = ptyKey(state.selectedProject, agentCode);
+  if (!state.tempAgents.has(key)) return;
+  console.info(`[temp-agent] ${key} completed first task — auto-disposing in 30s`);
+  state.tempAgents.delete(key);
+  setTimeout(() => { void killPty(key); }, 30_000);
 }
 
-async function killPty(code) {
-  const ent = state.ptys.get(code);
+async function killPty(key) {
+  const ent = state.ptys.get(key);
   if (!ent) return;
-  try { await invoke('pty_kill', { args: { id: code } }); } catch { /* ignore */ }
+  try { await invoke('pty_kill', { args: { id: key } }); } catch { /* ignore */ }
   ent.unlistens.forEach((u) => u());
   ent.term.dispose();
-  state.ptys.delete(code);
-  $$('#pane-tabs .tab').forEach((t) => { if (t.dataset.pane === code) t.remove(); });
-  $$('#panes .pane').forEach((p) => { if (p.dataset.pane === code) p.remove(); });
-  if (state.activePane === code) setActivePane('dashboard');
+  state.ptys.delete(key);
+  state.tempAgents.delete(key);
+  $$('#pane-tabs .tab').forEach((t) => { if (t.dataset.pane === key) t.remove(); });
+  $$('#panes .pane').forEach((p) => { if (p.dataset.pane === key) p.remove(); });
+  if (state.activePane === key) setActivePane('dashboard');
 }
 
 function tabEmoji(code) {
@@ -321,9 +363,81 @@ renderProjectPicker();
 bindProjectPicker();
 void refreshResumeBanner();
 
+// Status state machine — derived per pty from stdout/write timing + flags.
+function deriveStatus(ent) {
+  if (!ent || ent.exited) return { state: 'idle', label: 'exited' };
+  if (ent.blockedReason) return { state: 'blocked', label: ent.blockedReason };
+  const now = Date.now();
+  const sinceOut = ent.lastStdoutAt ? now - ent.lastStdoutAt : Infinity;
+  const sinceIn  = ent.lastWriteAt  ? now - ent.lastWriteAt  : Infinity;
+  if (sinceOut < 3_000) return { state: 'working', label: 'working' };
+  if (sinceIn  < 20_000 && sinceOut > sinceIn) return { state: 'waiting', label: 'waiting' };
+  if (sinceOut < 30_000) return { state: 'waiting', label: 'thinking' };
+  return { state: 'idle', label: 'idle' };
+}
+
+// Render the agent rail in the active dashboard. Same 9 slots, project-scoped.
+const AGENT_RAIL_ORDER = ['LEAD','CEO','SA','AD','WA','DA','QA','WD','TA','PETER'];
+function renderAgentRail() {
+  const root = document.getElementById('agent-rail');
+  if (!root) return;
+  const cwd = state.selectedProject;
+  const html = AGENT_RAIL_ORDER.map((code) => {
+    const key = ptyKey(cwd, code);
+    const ent = state.ptys.get(key);
+    const isHuman = code === 'PETER';
+    if (isHuman) {
+      return `<li class="ar-row ar-human" data-code="${code}">
+        <span class="ar-emoji">${tabEmoji(code)}</span>
+        <div class="ar-mid">
+          <span class="ar-code">${code}</span>
+          <span class="ar-label"><span class="ar-human-pill">human</span></span>
+        </div>
+      </li>`;
+    }
+    const { state: stat, label } = deriveStatus(ent);
+    const running = !!ent;
+    return `<li class="ar-row ar-${stat}" data-code="${code}" data-key="${key}">
+      <span class="ar-emoji">${tabEmoji(code)}</span>
+      <div class="ar-mid">
+        <span class="ar-code">${code}</span>
+        <span class="ar-label">${escapeHtml(label)}</span>
+      </div>
+      <span class="ar-dot" data-status="${stat}"></span>
+      ${running ? `<button class="ar-action" data-act="open" title="Open tab">↗</button>` : `<button class="ar-action ar-spawn" data-act="spawn" title="Spawn">+</button>`}
+    </li>`;
+  }).join('');
+  root.innerHTML = `<div class="ar-head">Agents</div><ul class="ar-list">${html}</ul>`;
+  root.querySelectorAll('.ar-row').forEach((row) => {
+    const code = row.dataset.code;
+    const key  = row.dataset.key;
+    row.querySelector('[data-act="open"]')?.addEventListener('click', (e) => { e.stopPropagation(); setActivePane(key); });
+    row.querySelector('[data-act="spawn"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const model = state.stickyModels?.[code] || AGENT_MODELS_DEFAULT[code] || 'claude-sonnet-4-6';
+      void spawnAgent(code, model, state.selectedProject);
+    });
+  });
+}
+
+// Update tab status dots + agent rail every second.
+function statusLoopTick() {
+  for (const [key, ent] of state.ptys.entries()) {
+    const tab = document.querySelector(`#pane-tabs .tab[data-pane="${CSS.escape(key)}"] .status-dot`);
+    if (tab) tab.dataset.status = deriveStatus(ent).state;
+  }
+  renderAgentRail();
+}
+setInterval(statusLoopTick, 1000);
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
 // Project view switcher — onboarding (no project, or phase=onboarding) vs
 // active (full kanban). Re-renders on project change + after brief approval.
 async function renderProjectView() {
+  applyProjectVisibility();
   const onbRoot   = document.getElementById('onboarding-root');
   const activeRoot = document.getElementById('dashboard-active');
   const cwd = state.selectedProject;
