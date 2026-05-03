@@ -2,6 +2,7 @@
 // over Tauri events. Frontend mounts an xterm.js per pty.
 
 mod pty;
+mod store;
 
 use tauri::{Manager, RunEvent};
 
@@ -20,9 +21,13 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             pty::pty_list,
+            store::models_get,
+            store::models_set,
+            store::enumerate_sessions,
         ])
         .setup(|app| {
             let _window = app.get_webview_window("main").expect("main window missing");
+            store::start_sentinel_watcher(app.handle().clone());
             log::info!("Yunomia v3 shell up");
             Ok(())
         })

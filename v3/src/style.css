@@ -96,3 +96,23 @@ body {
   background: var(--surface);
 }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.temp-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; color: var(--text-mid); text-transform: none; letter-spacing: 0; font-weight: 400; }
+.temp-row input { width: auto; }
+
+/* PH-134 Phase 3 — crash recovery banner */
+.resume-banner {
+  background: #fff8e1; color: #92400e;
+  border-bottom: 1px solid #fcd34d;
+  padding: 6px 12px; font-size: 12px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.resume-banner .resume-btn {
+  font: inherit; padding: 3px 8px; font-size: 11px;
+  border: 1px solid #fcd34d; border-radius: var(--radius);
+  background: white; color: #92400e; cursor: pointer;
+}
+.resume-banner .resume-btn:hover { background: #fef3c7; }
+.resume-banner .resume-dismiss {
+  margin-left: auto; background: transparent; border: 0; cursor: pointer;
+  font-size: 14px; color: #92400e;
+}

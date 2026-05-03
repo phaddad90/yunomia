@@ -6,6 +6,7 @@
 // xterm resize, and `pty_kill` on tab close. Stdout is streamed back to the
 // frontend via Tauri events on the channel `pty://output/<id>`.
 
+use crate::store;
 use anyhow::{anyhow, Result};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
@@ -172,6 +173,8 @@ pub fn pty_write(args: WriteArgs, registry: State<'_, PtyRegistry>) -> Result<()
         .write_all(args.data.as_bytes())
         .map_err(|e| e.to_string())?;
     handle.writer.flush().map_err(|e| e.to_string())?;
+    // PH-134 Phase 3 — audit every byte written. Cheap, debug-critical.
+    store::audit_pty_write(&args.id, &args.data);
     Ok(())
 }
 

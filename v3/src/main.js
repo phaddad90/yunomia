@@ -9,6 +9,9 @@ import { listen } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { startMcBridge, writeToAgent } from './lib/mc-bridge.js';
+import { initCompactOrchestrator, noteTaskBoundary, firePreCompact } from './lib/compact-orchestrator.js';
+import { startHeartbeat, noteWakeupSent, noteStdoutFromAgent } from './lib/heartbeat.js';
 
 const AGENT_MODELS_DEFAULT = {
   CEO: 'claude-opus-4-7',
@@ -25,8 +28,11 @@ const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
 
 const state = {
-  ptys: new Map(),     // id → { term, fit, unlistens: [] }
+  ptys: new Map(),         // id → { term, fit, unlistens: [], cwd, model, temp }
   activePane: 'dashboard',
+  stickyModels: {},        // PH-134 Phase 2: agent → model, persisted via Rust store
+  maxConcurrent: 3,        // PH-134 Phase 3: concurrency limit slider
+  tempAgents: new Set(),   // PH-134 Phase 3: agents flagged for auto-dispose after one task
 };
 
 function setActivePane(id) {
@@ -50,16 +56,33 @@ function bindUi() {
   });
 }
 
-function openSpawnModal()  { $('#spawn-modal').classList.remove('hidden'); }
+async function openSpawnModal() {
+  // Pre-fill model from sticky persistence per agent code.
+  try { state.stickyModels = await invoke('models_get'); } catch { /* ignore */ }
+  syncSpawnModelDefault();
+  $('#spawn-code').addEventListener('change', syncSpawnModelDefault, { once: false });
+  $('#spawn-modal').classList.remove('hidden');
+}
+function syncSpawnModelDefault() {
+  const code = $('#spawn-code').value;
+  const sticky = state.stickyModels?.[code];
+  const fallback = AGENT_MODELS_DEFAULT[code] || 'claude-sonnet-4-6';
+  $('#spawn-model').value = sticky || fallback;
+}
 function closeSpawnModal() { $('#spawn-modal').classList.add('hidden'); }
 
 async function submitSpawn() {
   const code = $('#spawn-code').value;
   const model = $('#spawn-model').value || AGENT_MODELS_DEFAULT[code] || 'claude-sonnet-4-6';
   const cwd = ($('#spawn-cwd').value || '/Users/peter/Desktop/Project Eunomia').trim();
+  const temp = $('#spawn-temp')?.checked || false;
+  // PH-134 Phase 3 — concurrency limit guard.
+  if (state.ptys.size >= state.maxConcurrent) {
+    if (!confirm(`At concurrency limit (${state.maxConcurrent}). Spawn anyway?`)) return;
+  }
   closeSpawnModal();
   try {
-    await spawnAgent(code, model, cwd);
+    await spawnAgent(code, model, cwd, { temp });
   } catch (err) {
     console.error('spawn failed', err);
     alert('Spawn failed: ' + (err?.message || err));
@@ -67,7 +90,7 @@ async function submitSpawn() {
 }
 
 // PH-134 — spawn one agent in a new pty pane. Real `claude` CLI in pty.
-async function spawnAgent(code, model, cwd) {
+async function spawnAgent(code, model, cwd, opts = {}) {
   if (state.ptys.has(code)) {
     setActivePane(code);
     return;
@@ -108,6 +131,7 @@ async function spawnAgent(code, model, cwd) {
   // Stream stdout from the pty into xterm.
   const unlistenOut = await listen(`pty://output/${code}`, (evt) => {
     term.write(evt.payload);
+    noteStdoutFromAgent(code);   // PH-134 Phase 3 — heartbeat L0 signal
   });
   const unlistenExit = await listen(`pty://exit/${code}`, (evt) => {
     term.writeln(`\r\n\x1b[31m[pty exited code=${evt.payload?.code ?? '?'}]\x1b[0m`);
@@ -122,12 +146,16 @@ async function spawnAgent(code, model, cwd) {
     invoke('pty_resize', { args: { id: code, cols, rows } }).catch((e) => console.warn('pty_resize', e));
   });
 
-  state.ptys.set(code, { term, fit, unlistens: [unlistenOut, unlistenExit] });
+  state.ptys.set(code, { term, fit, unlistens: [unlistenOut, unlistenExit], cwd, model, temp: !!opts.temp });
+  if (opts.temp) state.tempAgents.add(code);
 
   // Spawn the actual claude process. Args:
-  //   --model <model>            per-agent /model selection (PH-134 Phase 2)
+  //   --model <model>                 per-agent /model selection (PH-134 Phase 2)
+  //   --permission-mode acceptEdits   tiered-allowlist autonomy (PH-134, internal trust)
   //   (project dir is the cwd; claude infers session there)
-  const args = ['--model', model];
+  // Crash-recovery resume path uses --resume <session_id>; passed via opts.resume.
+  const args = ['--model', model, '--permission-mode', 'acceptEdits'];
+  if (opts.resume) args.push('--resume', opts.resume);
   await invoke('pty_spawn', {
     args: {
       id: code,
@@ -139,6 +167,40 @@ async function spawnAgent(code, model, cwd) {
       rows: term.rows,
     },
   });
+  // Persist the sticky model so this agent re-spawns with the same one.
+  try { await invoke('models_set', { args: { code, model } }); state.stickyModels[code] = model; }
+  catch (e) { console.warn('models_set failed', e); }
+}
+
+// PH-134 Phase 2 — wakeup prompt content.
+// For an already-running agent (the v3 case), the wakeup is a short ping;
+// the agent already loaded their full kickoff at spawn. Spawn-time kickoff
+// content can be wired later by reading SaaS Architect/<AGENT>-kickoff.md
+// (deferred — not strictly needed for Phase 2 smoke).
+function buildWakeupPrompt({ ticketHumanId, reason }) {
+  const ref = ticketHumanId ? ` (${ticketHumanId})` : '';
+  return `\n\n[Yunomia wakeup — ${reason}${ref}] Check your queue.\n`;
+}
+
+async function onWakeup(payload) {
+  const { agentCode, ticketHumanId, reason } = payload;
+  if (!state.ptys.has(agentCode)) return;   // agent not running in this shell
+  try {
+    await writeToAgent(agentCode, buildWakeupPrompt(payload));
+    noteWakeupSent(agentCode, ticketHumanId, reason);   // heartbeat L0 input
+    console.info(`[wakeup] ${agentCode} ← ${reason}`);
+  } catch (err) {
+    console.warn(`[wakeup] write failed for ${agentCode}`, err);
+  }
+}
+
+// PH-134 Phase 3 — temp-agent auto-dispose hook. When a flagged temp agent
+// posts their first task-boundary verdict, kill their pty after a short grace.
+function maybeDisposeTempAgent(agentCode) {
+  if (!state.tempAgents.has(agentCode)) return;
+  console.info(`[temp-agent] ${agentCode} completed first task — auto-disposing in 30s`);
+  state.tempAgents.delete(agentCode);
+  setTimeout(() => { void killPty(agentCode); }, 30_000);
 }
 
 async function killPty(code) {
@@ -159,3 +221,59 @@ function tabEmoji(code) {
 }
 
 bindUi();
+
+// PH-134 Phase 2 — bridge to MC + auto-compact orchestrator.
+void initCompactOrchestrator();
+startMcBridge({
+  getRunningAgents: () => Array.from(state.ptys.keys()),
+  onWakeup,
+  onTaskBoundary: (evt) => {
+    noteTaskBoundary(evt);
+    maybeDisposeTempAgent(evt.agentCode);
+  },
+});
+
+// PH-134 Phase 3 — heartbeat (L0 mechanical + L1 hourly CEO).
+startHeartbeat({
+  getRunningAgents: () => Array.from(state.ptys.keys()),
+  rewakeAgent: (code, ticketHumanId, reason) => onWakeup({ agentCode: code, ticketHumanId, reason }),
+});
+
+// PH-134 Phase 3 — crash recovery: enumerate recent sessions for current cwd.
+// Frontend renders a banner offering "Resume" for any session not currently
+// attached. Click → spawn --resume <session_id> in a new pty.
+async function enumerateRecentSessions() {
+  try {
+    const cwd = '/Users/peter/Desktop/Project Eunomia';
+    const sessions = await invoke('enumerate_sessions', { args: { cwd, limit: 8 } });
+    return sessions || [];
+  } catch (err) { console.warn('enumerate_sessions failed', err); return []; }
+}
+async function showResumeBannerIfAny() {
+  const sessions = await enumerateRecentSessions();
+  if (!sessions.length) return;
+  const recent = sessions.slice(0, 3);
+  const html = recent.map((s) => {
+    const when = s.modified ? new Date(s.modified).toLocaleString() : '?';
+    return `<button class="resume-btn" data-sid="${s.session_id}">Resume ${s.session_id.slice(0,8)} · ${when}</button>`;
+  }).join(' ');
+  const banner = document.createElement('div');
+  banner.className = 'resume-banner';
+  banner.innerHTML = `<span>Recent Claude sessions for this project:</span> ${html} <button class="resume-dismiss" type="button">✕</button>`;
+  document.body.insertBefore(banner, document.body.firstChild);
+  banner.querySelectorAll('.resume-btn').forEach((b) => {
+    b.addEventListener('click', async () => {
+      const sid = b.dataset.sid;
+      const code = prompt('Agent code to spawn this session as (e.g. CEO, QA):', 'CEO');
+      if (!code) return;
+      banner.remove();
+      const model = state.stickyModels?.[code] || AGENT_MODELS_DEFAULT[code] || 'claude-sonnet-4-6';
+      await spawnAgent(code, model, '/Users/peter/Desktop/Project Eunomia', { resume: sid });
+    });
+  });
+  banner.querySelector('.resume-dismiss').addEventListener('click', () => banner.remove());
+}
+void showResumeBannerIfAny();
+
+// Expose for console debugging during dogfood.
+window.yunomia = { state, firePreCompact };
