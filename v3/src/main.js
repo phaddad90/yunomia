@@ -24,6 +24,12 @@ const AGENT_MODELS_DEFAULT = {
   TA:  'claude-opus-4-7',
 };
 
+// PH-134 — MC base URL. Default 4700 so v3's MC instance NEVER collides with
+// PrintPepper's MC v0.3 on 4600. Override at runtime via DevTools:
+//   localStorage.setItem('mc.base', 'http://localhost:4600')
+//   (refresh)
+export const MC_BASE = localStorage.getItem('mc.base') || 'http://localhost:4700';
+
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
 
@@ -219,6 +225,10 @@ function tabEmoji(code) {
   const e = { CEO:'🎯', SA:'🟧', AD:'🟦', WA:'🟪', DA:'🟨', QA:'🟥', WD:'🌐', TA:'🛠', PETER:'🎩' };
   return e[code] || '⬛';
 }
+
+// Wire the iframe to MC_BASE at boot.
+const dashFrame = document.getElementById('dashboard-frame');
+if (dashFrame) dashFrame.src = MC_BASE + '/';
 
 bindUi();
 
